@@ -1,8 +1,14 @@
-out
-dist
-node_modules
+# Build output
+out/
+dist/
+node_modules/
+
+# VS Code
+.vscode/
 .vscode-test/
-.vscode
-/add-ins/ProParams/addin/commands/parameters/__pycache__
-/add-ins/CONstrainer/addin/lib/fusion360utils/__pycache__
-add-ins/ProParams/addin/commands/parameters/__pycache__/entry.cpython-314.pyc
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
