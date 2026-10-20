@@ -5,3 +5,4 @@ node_modules
 .vscode
 /add-ins/ProParams/addin/commands/parameters/__pycache__
 /add-ins/CONstrainer/addin/lib/fusion360utils/__pycache__
+add-ins/ProParams/addin/commands/parameters/__pycache__/entry.cpython-314.pyc
