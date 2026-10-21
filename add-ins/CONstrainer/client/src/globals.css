@@ -149,11 +149,18 @@ body {
   border-bottom-color: var(--cs-accent);
 }
 
+.cs_tabsRight {
+  display: flex;
+  align-items: stretch;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.cs_tabSettings,
 .cs_tabHelp {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: auto;
   padding-inline: 10px;
 }
 

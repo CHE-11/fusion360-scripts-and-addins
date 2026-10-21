@@ -19,10 +19,11 @@ export type GlobalParam = {
 };
 
 /**
- * Project parameters mirror the active design's native parameters.
- * User parameters and driving model dimensions (sketch and feature sizes)
- * are editable. Driven dimensions, which only report a measured value, stay
- * read-only (`isEditable=false`).
+ * Project parameters mirror the active design's local parameters.
+ * User parameters created in this design and driving model dimensions
+ * (sketch and feature sizes) are editable. Parameters pushed from the global
+ * store are omitted. Driven dimensions, which only report a measured value,
+ * stay read-only (`isEditable=false`).
  */
 export type ProjectParam = {
   name: string;
@@ -68,6 +69,19 @@ export type PushResult = {
   errors: string[];
 };
 
+/** Where the shared global-parameter JSON file is stored. */
+export type ParamsLocation = {
+  globalParamsPath: string;
+  defaultPath: string;
+  isCustom: boolean;
+};
+
+/** Folder picker result. `path` is the JSON file that would be used. */
+export type BrowseParamsFileResult = {
+  cancelled: boolean;
+  path: string;
+};
+
 // ---------------------------------------------------------------------------
 // Request payloads (JS -> Python)
 // ---------------------------------------------------------------------------
@@ -83,6 +97,7 @@ export type UpdateParamPayload = {
   originalName: string;
   name: string;
   expression: string;
+  unit?: string;
   comment?: string;
 };
 

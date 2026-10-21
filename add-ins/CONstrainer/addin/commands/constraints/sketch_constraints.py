@@ -94,13 +94,17 @@ def list_sketches():
 
 
 def delete_constraint(data):
+    data = data or {}
+    if data.get('sharedPointToken'):
+        return _detach_shared_point(data)
+
     design = _design()
-    constraint = _locate_constraint(design, data or {})
+    constraint = _locate_constraint(design, data)
     if not _is_deletable(constraint):
         raise ValueError('This constraint cannot be deleted.')
     label = _type_info(constraint)[1]
     sketch = _parent_sketch(constraint)
-    sketch_token = _token(sketch) if sketch else (data or {}).get('sketchToken', '')
+    sketch_token = _token(sketch) if sketch else data.get('sketchToken', '')
     try:
         constraint.deleteMe()
     except Exception as exc:
@@ -113,6 +117,22 @@ def select_item(data):
         data = {'token': data}
     data = data or {}
     design = _design()
+
+    if data.get('sharedPointToken'):
+        point, entities = _shared_point_targets(design, data)
+        sketch = _parent_sketch(point)
+        _reveal_sketch(sketch)
+        selected = _try_select(entities, clear=True)
+        highlighted = 0
+        if selected == 0:
+            highlighted = show_highlight(sketch, entities)
+            if sketch:
+                selected = _try_select([sketch], clear=False)
+        else:
+            clear_highlight()
+        if selected == 0 and highlighted == 0:
+            raise ValueError('Fusion could not select that geometry.')
+        return {'selected': selected, 'highlighted': highlighted}
 
     # Geometric-constraint tokens do not round-trip through findEntityByToken.
     if data.get('sketchToken') and data.get('type') and _as_index(data.get('index')) is not None:
@@ -136,10 +156,15 @@ def select_item(data):
 
 
 def highlight_constraint(data):
+    data = data or {}
     design = _design()
-    constraint = _locate_constraint(design, data or {})
-    entities = _live_entities(constraint)
-    sketch = _parent_sketch(constraint)
+    if data.get('sharedPointToken'):
+        point, entities = _shared_point_targets(design, data)
+        sketch = _parent_sketch(point)
+    else:
+        constraint = _locate_constraint(design, data)
+        entities = _live_entities(constraint)
+        sketch = _parent_sketch(constraint)
     _reveal_sketch(sketch)
     return {'highlighted': show_highlight(sketch, entities)}
 
@@ -361,9 +386,16 @@ def _serialize_sketch(sketch):
     try:
         geometric = sketch.geometricConstraints
         for index in range(geometric.count):
-            constraints.append(_serialize_constraint(sketch, index, geometric.item(index)))
+            try:
+                constraints.append(_serialize_constraint(sketch, index, geometric.item(index)))
+            except Exception:
+                futil.log(f'Could not read constraint {index} on {_safe_name(sketch, "Sketch")}.')
     except Exception:
         futil.log(f'Could not read constraints on {_safe_name(sketch, "Sketch")}.')
+
+    # Fusion draws a coincident glyph where curves share a sketch point, but that
+    # point is not a CoincidentConstraint and is absent from geometricConstraints.
+    constraints.extend(_shared_coincidents(sketch, len(constraints)))
 
     fully = False
     try:
@@ -377,6 +409,128 @@ def _serialize_sketch(sketch):
         'isFullyConstrained': fully,
         'constraints': constraints,
     }
+
+
+def _shared_coincidents(sketch, start_index):
+    rows = []
+    try:
+        points = sketch.sketchPoints
+        count = points.count
+    except Exception:
+        return rows
+
+    for index in range(count):
+        try:
+            point = points.item(index)
+        except Exception:
+            continue
+        connected = _connected_entities(point)
+        if len(connected) < 2:
+            continue
+        point_token = _token(point)
+        if not point_token:
+            continue
+        entities = [_serialize_entity(point, 'point')]
+        for entity in connected:
+            entities.append(_serialize_entity(entity, 'entity'))
+        sketch_token = _token(sketch)
+        rows.append({
+            'token': f'{sketch_token}::shared::{point_token}',
+            'sketchToken': sketch_token,
+            'index': start_index + len(rows),
+            'type': 'coincident',
+            'label': 'Coincident',
+            'isDeletable': _detachable_curve(point, connected) is not None,
+            'sharedPointToken': point_token,
+            'entities': entities,
+        })
+    return rows
+
+
+def _detach_shared_point(data):
+    design = _design()
+    point, connected = _shared_point_and_curves(design, data)
+    curve = _detachable_curve(point, connected)
+    if curve is None:
+        raise ValueError('This constraint cannot be deleted.')
+    sketch = _parent_sketch(point)
+    sketch_token = _token(sketch) if sketch else data.get('sketchToken', '')
+    try:
+        detached = point.detach(curve)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    if detached is False:
+        raise ValueError('This constraint cannot be deleted.')
+    return {'sketchToken': sketch_token, 'label': 'Coincident'}
+
+
+def _shared_point_targets(design, data):
+    point, connected = _shared_point_and_curves(design, data)
+    return point, [point, *connected]
+
+
+def _shared_point_and_curves(design, data):
+    point = adsk.fusion.SketchPoint.cast(_find(design, data.get('sharedPointToken')))
+    if not point:
+        raise ValueError('That coincident constraint is no longer in the sketch.')
+    connected = _connected_entities(point)
+    if len(connected) < 2:
+        raise ValueError('That coincident constraint is no longer in the sketch.')
+    return point, connected
+
+
+def _connected_entities(point):
+    entities = []
+    seen = set()
+    try:
+        connected = point.connectedEntities
+        count = connected.count
+    except Exception:
+        return entities
+    for index in range(count):
+        try:
+            entity = connected.item(index)
+        except Exception:
+            continue
+        if entity is None:
+            continue
+        key = _token(entity) or id(entity)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(entity)
+    return entities
+
+
+def _detachable_curve(point, entities):
+    # detach() only splits a curve that uses the point as an endpoint, and only
+    # while another curve still shares that endpoint. A shared center cannot.
+    curves = [entity for entity in entities if _uses_as_endpoint(entity, point)]
+    if len(curves) < 2:
+        return None
+    return curves[-1]
+
+
+def _uses_as_endpoint(entity, point):
+    curve = adsk.fusion.SketchCurve.cast(entity)
+    if not curve:
+        return False
+    for name in ('startSketchPoint', 'endSketchPoint'):
+        other = _read_attr(curve, name)
+        if other is not None and _same_entity(other, point):
+            return True
+    return False
+
+
+def _same_entity(left, right):
+    try:
+        if left == right:
+            return True
+    except Exception:
+        pass
+    left_token = _token(left)
+    right_token = _token(right)
+    return bool(left_token) and left_token == right_token
 
 
 def _serialize_constraint(sketch, index, constraint):

@@ -17,8 +17,10 @@
  */
 
 import type {
+  BrowseParamsFileResult,
   FeatureSelection,
   GlobalParam,
+  ParamsLocation,
   ProjectParam,
   PushResult,
 } from '../types/types';
@@ -202,6 +204,17 @@ export async function sendReady(): Promise<void> {
 // Dev mock (only used when window.adsk is absent)
 // ---------------------------------------------------------------------------
 
+const MOCK_DEFAULT_PARAMS_PATH = 'C:\\Users\\dev\\ProParams\\ProParams_global.json';
+let mockParamsPath = MOCK_DEFAULT_PARAMS_PATH;
+
+function mockParamsLocation(): ParamsLocation {
+  return {
+    globalParamsPath: mockParamsPath,
+    defaultPath: MOCK_DEFAULT_PARAMS_PATH,
+    isCustom: mockParamsPath !== MOCK_DEFAULT_PARAMS_PATH,
+  };
+}
+
 let mockGlobal: GlobalParam[] = [
   { name: 'wall_thickness', expression: '3 mm', unit: 'mm', comment: 'Default wall', category: 'Defaults' },
   { name: 'tolerance', expression: '0.1 mm', unit: 'mm', comment: 'Fit tolerance', category: 'Defaults' },
@@ -229,19 +242,71 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
   const body = (payload ?? {}) as Record<string, unknown>;
 
   switch (action) {
+    case 'settings:get':
+      return mockParamsLocation() as unknown as T;
+    case 'settings:browse': {
+      const requested = typeof body.globalParamsPath === 'string' ? body.globalParamsPath.trim() : '';
+      const fileName = requested.split(/[\\/]/).pop() || 'ProParams_global.json';
+      const result: BrowseParamsFileResult = {
+        cancelled: false,
+        path: `\\\\shared\\ProParams\\${fileName}`,
+      };
+      return result as unknown as T;
+    }
+    case 'settings:reveal':
+      return { opened: true } as unknown as T;
+    case 'settings:set': {
+      const next = typeof body.globalParamsPath === 'string' ? body.globalParamsPath.trim() : '';
+      mockParamsPath = next || MOCK_DEFAULT_PARAMS_PATH;
+      return mockParamsLocation() as unknown as T;
+    }
     case 'global:list':
-      return mockGlobal as unknown as T;
+      return mockGlobal.map((param) => ({ ...param })) as unknown as T;
     case 'global:save':
       mockGlobal = (body.params as GlobalParam[]) ?? mockGlobal;
       return undefined as unknown as T;
-    case 'global:pushToDesign':
-      return { created: 0, updated: mockGlobal.length, errors: [] } as PushResult as unknown as T;
+    case 'global:pushToDesign': {
+      const incoming = (Array.isArray(body.params) ? body.params : mockGlobal) as GlobalParam[];
+      let created = 0;
+      let updated = 0;
+      for (const globalParam of incoming) {
+        const existing = mockProject.find((param) => param.name === globalParam.name && param.isUserParam);
+        if (existing) {
+          existing.expression = globalParam.expression;
+          existing.value = globalParam.expression;
+          existing.unit = globalParam.unit ?? '';
+          existing.comment = globalParam.comment ?? '';
+          updated += 1;
+        } else {
+          mockProject.push({
+            name: globalParam.name,
+            expression: globalParam.expression,
+            value: globalParam.expression,
+            unit: globalParam.unit ?? '',
+            comment: globalParam.comment ?? '',
+            isUserParam: true,
+            isDeletable: true,
+            isEditable: true,
+          });
+          created += 1;
+        }
+      }
+      return { created, updated, errors: [] } as PushResult as unknown as T;
+    }
 
-    case 'project:list':
-      return mockProject as unknown as T;
+    case 'project:list': {
+      const globalNames = new Set(mockGlobal.map((param) => param.name));
+      return mockProject
+        .filter((param) => !param.isUserParam || !globalNames.has(param.name))
+        .map((param) => ({ ...param })) as unknown as T;
+    }
     case 'project:add': {
+      const name = String(body.name);
+      if (mockGlobal.some((param) => param.name === name)) {
+        throw new FusionError(`Cannot create "${name}". That name matches a global parameter.`);
+      }
       const p: ProjectParam = {
-        name: String(body.name),
+        name,
         expression: String(body.expression),
         value: '',
         unit: String(body.unit ?? ''),
@@ -254,12 +319,19 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
       return p as unknown as T;
     }
     case 'project:update': {
+      const nextName = String(body.name);
+      if (nextName !== String(body.originalName) && mockGlobal.some((param) => param.name === nextName)) {
+        throw new FusionError(
+          `Cannot rename "${String(body.originalName)}" to "${nextName}". That name matches a global parameter.`
+        );
+      }
       const idx = mockProject.findIndex((p) => p.name === body.originalName);
       if (idx >= 0) {
         mockProject[idx] = {
           ...mockProject[idx],
           name: String(body.name),
           expression: String(body.expression),
+          unit: String(body.unit ?? mockProject[idx].unit ?? ''),
           comment: String(body.comment ?? ''),
         };
         return mockProject[idx] as unknown as T;
@@ -296,7 +368,13 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
         ...mockFeature,
         params: mockFeature.params.map((p) =>
           p.name === body.originalName
-            ? { ...p, name: String(body.name), expression: String(body.expression), comment: String(body.comment ?? '') }
+            ? {
+                ...p,
+                name: String(body.name),
+                expression: String(body.expression),
+                unit: String(body.unit ?? p.unit ?? ''),
+                comment: String(body.comment ?? ''),
+              }
             : p
         ),
       };

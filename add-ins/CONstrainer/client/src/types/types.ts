@@ -1,4 +1,4 @@
-export type TabId = 'sketches' | 'joints' | 'constraints' | 'help';
+export type TabId = 'sketches' | 'joints' | 'constraints' | 'help' | 'settings';
 
 export type DesignIntent = 'part' | 'assembly' | 'hybrid' | 'none';
 
@@ -23,6 +23,9 @@ export type SketchConstraint = {
   label: string;
   isDeletable: boolean;
   entities: SketchEntityRef[];
+  // Set when Fusion drew a coincident glyph for curves that share a sketch point.
+  // That case is not a CoincidentConstraint in geometricConstraints.
+  sharedPointToken?: string;
 };
 
 export type SketchInfo = {

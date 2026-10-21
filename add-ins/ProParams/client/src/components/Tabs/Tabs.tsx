@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
-import { IconArrowsTransferUpDown, IconBox, IconClick, IconWorld } from '@tabler/icons-react';
+import { IconArrowsTransferUpDown, IconBox, IconFileSettings, IconSettings, IconWorld } from '@tabler/icons-react';
 
-import { request } from '../../connector/fusionBridge';
-import type { GlobalParam, PushResult, TabId } from '../../types/types';
+import type { TabId } from '../../types/types';
+import { useGlobalParams } from '../../utils/globalParams';
 import { getLastSyncAt, subscribeLastSync } from '../../utils/lastSync';
-import { useToast } from '../common/Toast';
 
 type TabDef = {
   id: TabId;
@@ -18,11 +17,6 @@ const TABS: TabDef[] = [
   { id: 'global', label: 'Global', icon: <IconWorld size={16} />, hint: 'App-wide saved parameters' },
   { id: 'project', label: 'Project', icon: <IconBox size={16} />, hint: 'Parameters in the active design' },
 ];
-
-type Props = {
-  active: TabId;
-  onChange: (tab: TabId) => void;
-};
 
 function formatSyncTime(at: number): string {
   const date = new Date(at);
@@ -37,29 +31,16 @@ function formatSyncTime(at: number): string {
   return `${day}, ${time}`;
 }
 
-export function Tabs({ active, onChange }: Props) {
+type Props = {
+  active: TabId;
+  onChange: (tab: TabId) => void; 
+  openSettings: () => void;
+};
+
+export function Tabs({ ...props }: Props) {
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(getLastSyncAt());
-  const [params, setParams] = useState<GlobalParam[]>([]);
-  const [busy, setBusy] = useState(false);
-  const { showToast } = useToast();
-  
-  const pushToDesign = useCallback(async () => {
-    setBusy(true);
-    try {
-      const result = await request<PushResult>('global:pushToDesign', {});
-      const { created, updated, errors } = result;
-      if (errors.length) {
-        showToast(`Pushed with ${errors.length} error(s): ${errors[0]}`, 'error');
-      } else {
-        showToast(`Pushed to design (${created} created, ${updated} updated).`, 'success');
-      }
-    } catch (e) {
-      showToast(`Push failed: ${String(e)}`, 'error');
-    } finally {
-      setBusy(false);
-    }
-  }, [showToast]);
-  
+  const { params, busy, pushToDesign } = useGlobalParams();
+
   useEffect(() => subscribeLastSync(setLastSyncAt), []);
 
   const syncLabel = lastSyncAt == null ? '—' : formatSyncTime(lastSyncAt);
@@ -75,11 +56,11 @@ export function Tabs({ active, onChange }: Props) {
           <button
             key={tab.id}
             id={`pp_tab_${tab.id}`}
-            className={`pp_tab ${active === tab.id ? 'pp_tabActive' : ''}`}
+            className={`pp_tab ${props.active === tab.id ? 'pp_tabActive' : ''}`}
             role="tab"
-            aria-selected={active === tab.id}
+            aria-selected={props.active === tab.id}
             title={tab.hint}
-            onClick={() => onChange(tab.id)}
+            onClick={() => props.onChange(tab.id)}
           >
             {tab.icon}
             <span>{tab.label}</span>
@@ -93,11 +74,19 @@ export function Tabs({ active, onChange }: Props) {
       <button
         id="pp_global_pushBtn"
         className="pp_btn"
-        title="Create/update these parameters in the active design"
+        title="Sync global parameters into the active design"
         onClick={() => void pushToDesign()}
         disabled={busy || params.length === 0}
       >
         <IconArrowsTransferUpDown size={14} />
+      </button>
+      <button
+        id="pp_settingsBtn"
+        className="pp_btn"
+        title="Open settings"
+        onClick={() => void props.openSettings()}
+      >
+        <IconSettings size={14} />
       </button>
     </div>
   );

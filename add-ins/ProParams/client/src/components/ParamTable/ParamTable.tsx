@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   IconCheck,
+  IconCircleX,
   IconCopy,
   IconEdit,
   IconPlus,
@@ -15,6 +16,7 @@ import {
 
 import { findUnit } from '../../data/fusionUnits';
 import { copyToClipboard } from '../../utils/clipboard';
+import { syncExpressionUnit } from '../../utils/expressionUnits';
 import { EmptyState } from '../common/EmptyState';
 import { useToast } from '../common/Toast';
 import { UnitSelect } from '../common/UnitSelect';
@@ -63,6 +65,37 @@ const COLUMN_TO_FIELD: Partial<Record<TableColumn, DraftField>> = {
 
 const NEW_KEY = '__new__';
 
+/** Fusion's automatic dimension names: a lowercase d and digits, nothing else. */
+const AUTO_DIMENSION_NAME = /^d\d+$/;
+
+function isAutoDimensionName(name: string): boolean {
+  return AUTO_DIMENSION_NAME.test(name);
+}
+
+const PARAMETER_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const RESERVED_PARAMETER_NAMES = new Set([
+  'mm', 'cm', 'm', 'km',
+  'in', 'ft', 'yd',
+  'deg', 'rad',
+  'g', 'kg', 'lb',
+  's', 'min', 'hr',
+]);
+
+const INVALID_NAME_TITLE =
+  'Start with a letter or underscore, then use only letters, numbers, and underscores. Unit names such as mm, in, and deg are reserved.';
+
+function isValidParameterName(name: string): boolean {
+  if (!PARAMETER_NAME_REGEX.test(name)) return false;
+  return !RESERVED_PARAMETER_NAMES.has(name);
+}
+
+function unitFieldEditable(key: string, fields: DraftField[], rows: TableRow[]): boolean {
+  if (key === NEW_KEY) return fields.includes('unit');
+  const row = rows.find((item) => item.name === key);
+  return (row?.editableFields ?? fields).includes('unit');
+}
+
 /** Display columns that open the row editor when clicked. */
 const CLICK_EDIT_COLUMNS: TableColumn[] = ['name', 'expression', 'value', 'unit', 'comment'];
 
@@ -108,7 +141,8 @@ type Props = {
   onDelete?: (name: string) => Promise<void> | void;
   refName: (name: string) => string;
   busy?: boolean;
-  toolbarRight?: ReactNode;
+  /** Project table: toggle created parameters against every model dimension. */
+  dimensionToggle?: boolean;
   emptyTitle?: string;
   emptyMessage?: string;
 };
@@ -125,16 +159,19 @@ export function ParamTable({
   onDelete,
   refName,
   busy,
-  toolbarRight,
+  dimensionToggle = false,
   emptyTitle = 'No parameters',
   emptyMessage,
 }: Props) {
   const { showToast } = useToast();
   const [search, setSearch] = useState('');
+  const [showAllDimensions, setShowAllDimensions] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState<TableColumn>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftRow>(emptyDraft());
+  const [nameInvalid, setNameInvalid] = useState(false);
   const pendingFocusId = useRef<string | null>(null);
   const editRowRef = useRef<HTMLTableRowElement | null>(null);
   const draftRef = useRef(draft);
@@ -142,12 +179,18 @@ export function ParamTable({
   const editSession = useRef(0);
   const originalRef = useRef<DraftRow | null>(null);
   const committing = useRef(false);
+  const unitTouched = useRef(false);
+  const nameInvalidRef = useRef(false);
   const onAddRef = useRef(onAdd);
   const onEditRef = useRef(onEdit);
+  const rowsRef = useRef(rows);
+  const editableFieldsRef = useRef(editableFields);
   draftRef.current = draft;
   editingKeyRef.current = editingKey;
   onAddRef.current = onAdd;
   onEditRef.current = onEdit;
+  rowsRef.current = rows;
+  editableFieldsRef.current = editableFields;
 
   const patchDraft = useCallback((patch: Partial<DraftRow>) => {
     if (!editingKeyRef.current) return;
@@ -167,15 +210,35 @@ export function ParamTable({
     });
   }, []);
 
+  const categories = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const category = (row.category ?? '').trim();
+      if (category) seen.add(category);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [rows]);
+
+  useEffect(() => {
+    if (activeCategory && !categories.includes(activeCategory)) setActiveCategory(null);
+  }, [activeCategory, categories]);
+
   const filteredSorted = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const hideAuto = dimensionToggle && !showAllDimensions;
+    const byDimension = hideAuto
+      ? rows.filter((row) => !isAutoDimensionName(row.name) || row.name === editingKey)
+      : rows;
+    const byCategory = activeCategory
+      ? byDimension.filter((row) => (row.category ?? '').trim() === activeCategory)
+      : byDimension;
     const filtered = q
-      ? rows.filter((r) =>
+      ? byCategory.filter((r) =>
           [r.name, r.comment, r.category, r.expression]
             .filter(Boolean)
             .some((v) => (v as string).toLowerCase().includes(q))
         )
-      : rows.slice();
+      : byCategory.slice();
 
     const dir = sortDir === 'asc' ? 1 : -1;
     filtered.sort((a, b) => {
@@ -186,20 +249,34 @@ export function ParamTable({
       return 0;
     });
     return filtered;
-  }, [rows, search, sortCol, sortDir]);
+  }, [rows, search, activeCategory, dimensionToggle, showAllDimensions, editingKey, sortCol, sortDir]);
+
+  const clearNameFlag = useCallback(() => {
+    nameInvalidRef.current = false;
+    setNameInvalid(false);
+  }, []);
+
+  const flagInvalidName = useCallback(() => {
+    nameInvalidRef.current = true;
+    setNameInvalid(true);
+  }, []);
 
   const openEditor = useCallback((key: string, next: DraftRow) => {
     editSession.current += 1;
+    unitTouched.current = false;
+    nameInvalidRef.current = false;
     draftRef.current = next;
     editingKeyRef.current = key;
     originalRef.current = key === NEW_KEY ? null : next;
+    setNameInvalid(false);
     setDraft(next);
     setEditingKey(key);
   }, []);
 
   const startAdd = useCallback(() => {
+    pendingFocusId.current = `${idPrefix}_draft_name`;
     openEditor(NEW_KEY, emptyDraft());
-  }, [openEditor]);
+  }, [idPrefix, openEditor]);
 
   const startEdit = useCallback(
     (row: TableRow) => {
@@ -236,8 +313,31 @@ export function ParamTable({
   );
 
   useEffect(() => {
+    if (!canAdd) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'a' || !event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) {
+        return;
+      }
+      if (event.repeat || busy || editingKeyRef.current === NEW_KEY) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || !!target.closest('input, textarea, select, [contenteditable="true"]'))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      startAdd();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [canAdd, busy, startAdd]);
+
+  useEffect(() => {
     const targetId = pendingFocusId.current;
-    if (!editingKey || editingKey === NEW_KEY || !targetId) return;
+    if (!editingKey || !targetId) return;
     pendingFocusId.current = null;
     const node = document.getElementById(targetId) as HTMLInputElement | null;
     if (!node) return;
@@ -248,10 +348,12 @@ export function ParamTable({
   const closeEditor = () => {
     editingKeyRef.current = null;
     originalRef.current = null;
+    nameInvalidRef.current = false;
     const blank = emptyDraft();
     draftRef.current = blank;
     setEditingKey(null);
     setDraft(blank);
+    setNameInvalid(false);
   };
 
   const cancelEdit = useCallback(() => {
@@ -263,8 +365,10 @@ export function ParamTable({
     if (committing.current) return;
     const session = editSession.current;
     const key = editingKeyRef.current;
-    const current = draftRef.current;
     if (!key) return;
+    // focusout can save before the expression input's blur handler runs.
+    syncDraft('expression');
+    const current = draftRef.current;
     committing.current = true;
     const original = originalRef.current;
     const unchanged =
@@ -275,10 +379,15 @@ export function ParamTable({
       current.comment === original.comment &&
       current.category === original.category;
     const blankNewRow = key === NEW_KEY && !current.name.trim() && !current.expression.trim();
+    const enteredInvalidName = current.name.length > 0 && !isValidParameterName(current.name);
     try {
       if ((key !== NEW_KEY && unchanged) || blankNewRow) {
         if (editSession.current !== session) return;
         closeEditor();
+        return;
+      }
+      if (enteredInvalidName) {
+        flagInvalidName();
         return;
       }
       if (key === NEW_KEY) await onAddRef.current?.(current);
@@ -290,7 +399,7 @@ export function ParamTable({
     } finally {
       committing.current = false;
     }
-  }, []);
+  }, [flagInvalidName]);
 
   useEffect(() => {
     if (!editingKey) return;
@@ -374,36 +483,72 @@ export function ParamTable({
     [refName, showToast]
   );
 
+  const syncDraft = (source: 'expression' | 'unit', unit?: string) => {
+    const key = editingKeyRef.current;
+    if (!key || !unitFieldEditable(key, editableFieldsRef.current, rowsRef.current)) return;
+    if (source === 'unit') unitTouched.current = true;
+    const current = draftRef.current;
+    // A unit picked after the expression was typed stays put. Editing the
+    // expression again clears that and lets the typed unit win.
+    const mode = source === 'expression' && unitTouched.current ? 'unit' : source;
+    const next = syncExpressionUnit(current.expression, unit ?? current.unit, mode);
+    if (next.expression === current.expression && next.unit === current.unit) return;
+    patchDraft(next);
+  };
+
   const colSpan = columns.length + 1;
 
   const renderEditableCell = (col: TableColumn, row?: TableRow) => {
     const field = COLUMN_TO_FIELD[col];
     const fields = row?.editableFields ?? editableFields;
     if (field && fields.includes(field)) {
+      const locked = nameInvalid && field !== 'name';
       if (field === 'unit') {
         return (
           <div id={`${idPrefix}_draft_unit_slot`} className="pp_editSlot">
             <UnitSelect
               id={`${idPrefix}_draft_unit`}
               value={draft.unit}
-              onChange={(unit) => patchDraft({ unit })}
+              disabled={locked}
+              onChange={(unit) => syncDraft('unit', unit)}
               onCommit={() => void commit()}
               onCancel={cancelEdit}
             />
           </div>
         );
       }
+      const invalidName = field === 'name' && nameInvalid;
       return (
         <div id={`${idPrefix}_draft_${field}_slot`} className="pp_editSlot">
           <input
             id={`${idPrefix}_draft_${field}`}
-            className="pp_input pp_inputInline"
+            className={invalidName ? 'pp_input pp_inputInline pp_inputInvalid' : 'pp_input pp_inputInline'}
             size={1}
             value={draft[field]}
             placeholder={COLUMN_LABELS[col]}
-            onChange={(e) => patchDraft({ [field]: e.target.value })}
+            disabled={locked}
+            aria-invalid={invalidName || undefined}
+            title={invalidName ? INVALID_NAME_TITLE : undefined}
+            onChange={(e) => {
+              const value = e.target.value;
+              patchDraft({ [field]: value });
+              if (field === 'name' && nameInvalidRef.current && isValidParameterName(value)) clearNameFlag();
+            }}
+            onBlur={
+              field === 'name'
+                ? () => {
+                    const name = draftRef.current.name;
+                    if (name.length > 0 && !isValidParameterName(name)) flagInvalidName();
+                  }
+                : field === 'expression'
+                  ? () => syncDraft('expression')
+                  : undefined
+            }
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void commit();
+              if (e.key === 'Enter') {
+                if (field === 'expression') syncDraft('expression');
+                void commit();
+              }
               if (e.key === 'Escape') cancelEdit();
             }}
           />
@@ -417,7 +562,15 @@ export function ParamTable({
   const renderDisplayCell = (col: TableColumn, row: TableRow) => {
     switch (col) {
       case 'name':
-        return <span className="pp_cellClip pp_cellName">{row.name}</span>;
+        return (
+          <span
+            className={
+              isAutoDimensionName(row.name) ? 'pp_cellClip pp_cellName pp_autoDimName' : 'pp_cellClip pp_cellName'
+            }
+          >
+            {row.name}
+          </span>
+        );
       case 'expression':
         return <span className="pp_cellClip pp_cellMono">{row.expression}</span>;
       case 'value':
@@ -440,37 +593,88 @@ export function ParamTable({
   return (
     <div id={`${idPrefix}_tableWrap`} className="pp_tableWrap">
       <div id={`${idPrefix}_toolbar`} className="pp_tableToolbar">
-        <div className="pp_search">
-          <IconSearch size={16} className="pp_searchIcon" />
-          <input
-            id={`${idPrefix}_search`}
-            className="pp_input pp_searchInput"
-            type="text"
-            value={search}
-            placeholder="Search parameters..."
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {search && (
-            <button className="pp_iconBtn pp_searchClear" title="Clear" onClick={() => setSearch('')}>
-              <IconX size={14} />
+        <div id={`${idPrefix}_toolbarLead`} className="pp_toolbarLead">
+          <div className="pp_search">
+            <IconSearch size={16} className="pp_searchIcon" />
+            <input
+              id={`${idPrefix}_search`}
+              className="pp_input pp_searchInput"
+              type="text"
+              value={search}
+              placeholder="Search parameters..."
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search && (
+              <button className="pp_iconBtn pp_searchClear" title="Clear" onClick={() => setSearch('')}>
+                <IconX size={14} />
+              </button>
+            )}
+          </div>
+          {dimensionToggle && (
+            <button
+              id={`${idPrefix}_dimToggle`}
+              type="button"
+              className="pp_btn pp_dimToggle"
+              aria-pressed={showAllDimensions}
+              title={
+                showAllDimensions
+                  ? 'Showing every dimension. Click to show created parameters only.'
+                  : 'Showing created parameters. Click to show all dimensions.'
+              }
+              onClick={() => setShowAllDimensions((current) => !current)}
+            >
+              <span id={`${idPrefix}_dimCreated`} className={showAllDimensions ? undefined : 'pp_dimToggleOn'}>
+                Created
+              </span>
+              <span id={`${idPrefix}_dimSep`} className="pp_dimToggleSep" aria-hidden="true">
+                /
+              </span>
+              <span id={`${idPrefix}_dimAll`} className={showAllDimensions ? 'pp_dimToggleOn' : undefined}>
+                All
+              </span>
             </button>
           )}
         </div>
         <div className="pp_toolbarActions">
-          {toolbarRight}
           {canAdd && (
             <button
               id={`${idPrefix}_addBtn`}
               className="pp_btn pp_btnPrimary"
+              title={`${addLabel} (Ctrl+A)`}
+              aria-keyshortcuts="Control+A"
               onClick={startAdd}
               disabled={busy || editingKey === NEW_KEY}
             >
               <IconPlus size={16} />
               {addLabel}
+              <kbd id={`${idPrefix}_addKbd`} className="pp_kbd">
+                Ctrl+A
+              </kbd>
             </button>
           )}
         </div>
       </div>
+
+      {categories.length > 0 && (
+        <div id={`${idPrefix}_categoryChips`} className="pp_chipRow" role="group" aria-label="Filter by category">
+          {categories.map((category, index) => {
+            const pressed = activeCategory === category;
+            return (
+              <button
+                id={`${idPrefix}_chip_${index}`}
+                key={category}
+                type="button"
+                className={pressed ? 'pp_chip pp_chipPressed' : 'pp_chip'}
+                aria-pressed={pressed}
+                onClick={() => setActiveCategory(pressed ? null : category)}
+              >
+                {category}
+                {pressed && <IconCircleX size={14} className="pp_chipIcon" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="pp_tableScroll">
         <table id={`${idPrefix}_table`} className="pp_table">
@@ -506,8 +710,9 @@ export function ParamTable({
                     <button
                       id={`${idPrefix}_new_save`}
                       className="pp_iconBtn pp_iconBtnOk"
-                      title="Save"
+                      title={nameInvalid ? INVALID_NAME_TITLE : 'Save'}
                       onClick={() => void commit()}
+                      disabled={nameInvalid}
                     >
                       <IconCheck size={16} />
                     </button>
@@ -529,7 +734,9 @@ export function ParamTable({
                   key={row.name}
                   id={isEditing ? `${idPrefix}_editRow` : undefined}
                   ref={isEditing ? editRowRef : undefined}
-                  className={isEditing ? 'pp_editRow' : ''}
+                  className={[isEditing ? 'pp_editRow' : '', isAutoDimensionName(row.name) ? 'pp_autoDim' : '']
+                    .filter(Boolean)
+                    .join(' ')}
                 >
                   {columns.map((col) => {
                     const canClickEdit =
@@ -566,8 +773,9 @@ export function ParamTable({
                           <button
                             id={`${idPrefix}_r${rowIndex}_save`}
                             className="pp_iconBtn pp_iconBtnOk"
-                            title="Save"
+                            title={nameInvalid ? INVALID_NAME_TITLE : 'Save'}
                             onClick={() => void commit()}
+                            disabled={nameInvalid}
                           >
                             <IconCheck size={16} />
                           </button>
@@ -648,8 +856,16 @@ export function ParamTable({
                 <td colSpan={colSpan} className="pp_emptyCell">
                   <EmptyState
                     id={`${idPrefix}_empty`}
-                    title={search ? 'No matches' : emptyTitle}
-                    message={search ? `Nothing matches "${search}".` : emptyMessage}
+                    title={search || activeCategory ? 'No matches' : emptyTitle}
+                    message={
+                      search && activeCategory
+                        ? `Nothing in "${activeCategory}" matches "${search}".`
+                        : search
+                          ? `Nothing matches "${search}".`
+                          : activeCategory
+                            ? `Nothing in "${activeCategory}".`
+                            : emptyMessage
+                    }
                   />
                 </td>
               </tr>

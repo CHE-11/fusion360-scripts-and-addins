@@ -31,6 +31,7 @@ function constraintRequest(constraint: SketchConstraint) {
     index: constraint.index,
     type: constraint.type,
     entityTokens: constraint.entities.map((entity) => entity.token),
+    sharedPointToken: constraint.sharedPointToken ?? '',
   };
 }
 

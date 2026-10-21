@@ -15,6 +15,7 @@ type MenuBox = {
 type Props = {
   id: string;
   value: string;
+  disabled?: boolean;
   onChange: (unit: string) => void;
   onCommit?: () => void;
   onCancel?: () => void;
@@ -30,7 +31,7 @@ function unitIndex(symbol: string): number {
   return index >= 0 ? index : 0;
 }
 
-export function UnitSelect({ id, value, onChange, onCommit, onCancel }: Props) {
+export function UnitSelect({ id, value, disabled = false, onChange, onCommit, onCancel }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -111,6 +112,13 @@ export function UnitSelect({ id, value, onChange, onCommit, onCancel }: Props) {
       menu.scrollTop += nodeRect.bottom - menuRect.bottom;
     }
   }, [open, safeActive, results, id, box]);
+
+  useEffect(() => {
+    if (!disabled) return;
+    setOpen(false);
+    setQuery(null);
+    setBox(null);
+  }, [disabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -244,6 +252,7 @@ export function UnitSelect({ id, value, onChange, onCommit, onCancel }: Props) {
         aria-activedescendant={open && results[safeActive] ? optionDomId(id, results[safeActive].symbol) : undefined}
         autoComplete="off"
         spellCheck={false}
+        disabled={disabled}
         placeholder={value ? 'Unit' : 'unitless'}
         title={selected?.label || value || 'Unitless'}
         value={inputValue}
@@ -267,6 +276,7 @@ export function UnitSelect({ id, value, onChange, onCommit, onCancel }: Props) {
         type="button"
         className="pp_unitToggle"
         tabIndex={-1}
+        disabled={disabled}
         aria-label="Show units"
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {

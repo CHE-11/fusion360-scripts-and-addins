@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
-import { IconRefresh } from '@tabler/icons-react';
-
-import { onEvent, request } from '../../connector/fusionBridge';
+import { request } from '../../connector/fusionBridge';
 import type { GlobalParam } from '../../types/types';
+import { useGlobalParams } from '../../utils/globalParams';
 import { sanitizeName } from '../../utils/sanitizeName';
 import { ParamTable, type DraftRow, type TableColumn, type TableRow } from '../ParamTable/ParamTable';
 import { useToast } from '../common/Toast';
@@ -34,37 +33,14 @@ function draftToParam(draft: DraftRow): GlobalParam {
 
 export function GlobalTab() {
   const { showToast } = useToast();
-  const [params, setParams] = useState<GlobalParam[]>([]);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const data = await request<GlobalParam[]>('global:list');
-      setParams(data ?? []);
-    } catch (e) {
-      showToast(`Failed to load global parameters: ${String(e)}`, 'error');
-    }
-  }, [showToast]);
-
-  useEffect(() => {
-    void load();
-    // Refresh when the backend pushes a change (e.g. the file changed on disk).
-    const off = onEvent('loadGlobal', (raw) => {
-      try {
-        setParams(JSON.parse(raw) as GlobalParam[]);
-      } catch {
-        /* ignore malformed push */
-      }
-    });
-    return off;
-  }, [load]);
+  const { params, setParams, busy, pushToDesign } = useGlobalParams();
 
   const persist = useCallback(
     async (next: GlobalParam[]) => {
       const saved = await request<GlobalParam[]>('global:save', { params: next });
       setParams(saved ?? next);
     },
-    []
+    [setParams]
   );
 
   const onAdd = useCallback(
@@ -81,12 +57,13 @@ export function GlobalTab() {
       try {
         await persist([...params, p]);
         showToast(`Added "${p.name}".`, 'success');
+        await pushToDesign();
       } catch (e) {
         showToast(`Save failed: ${String(e)}`, 'error');
         throw e;
       }
     },
-    [params, persist, showToast]
+    [params, persist, pushToDesign, showToast]
   );
 
   const onEdit = useCallback(
@@ -140,13 +117,6 @@ export function GlobalTab() {
         busy={busy}
         emptyTitle="No global parameters"
         emptyMessage="Add app-wide parameters here, then push them into any open design."
-        toolbarRight={
-          <>
-            <button className="pp_btn" title="Reload" onClick={() => void load()} disabled={busy}>
-              <IconRefresh size={16} />
-            </button>
-          </>
-        }
       />
     </div>
   );

@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
-
-import { IconRefresh } from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { onEvent, request } from '../../connector/fusionBridge';
 import type { ProjectParam } from '../../types/types';
+import { subscribeProjectReload, useGlobalParams } from '../../utils/globalParams';
 import { sanitizeName } from '../../utils/sanitizeName';
 import { ParamTable, type DraftRow, type TableColumn, type TableRow } from '../ParamTable/ParamTable';
 import { useToast } from '../common/Toast';
 
 const COLUMNS: TableColumn[] = ['name', 'expression', 'value', 'unit', 'comment'];
+
+function matchingGlobalName(name: string, globalNames: { name: string }[]): string | undefined {
+  const key = sanitizeName(name.trim());
+  if (!key) return undefined;
+  return globalNames.find((param) => sanitizeName(param.name) === key)?.name;
+}
 
 function toRows(params: ProjectParam[]): TableRow[] {
   return params.map((p) => ({
@@ -27,8 +32,17 @@ function toRows(params: ProjectParam[]): TableRow[] {
 
 export function ProjectTab() {
   const { showToast } = useToast();
+  const { params: globalParams } = useGlobalParams();
   const [params, setParams] = useState<ProjectParam[]>([]);
   const [docName, setDocName] = useState('');
+
+  const rows = useMemo(() => {
+    const globalNames = new Set(globalParams.map((param) => sanitizeName(param.name)));
+    const local = params.filter(
+      (param) => !param.isUserParam || !globalNames.has(sanitizeName(param.name))
+    );
+    return toRows(local);
+  }, [globalParams, params]);
 
   const load = useCallback(async () => {
     try {
@@ -54,42 +68,63 @@ export function ProjectTab() {
     return off;
   }, [load]);
 
+  useEffect(() => subscribeProjectReload(() => void load()), [load]);
+
   const onAdd = useCallback(
     async (draft: DraftRow) => {
+      const name = draft.name.trim();
+      const globalMatch = matchingGlobalName(name, globalParams);
+      if (globalMatch) {
+        showToast(
+          `Cannot create "${name}". That name matches the global parameter "${globalMatch}".`,
+          'error'
+        );
+        throw new Error('global-name');
+      }
       try {
         await request<ProjectParam>('project:add', {
-          name: draft.name.trim(),
+          name,
           expression: draft.expression.trim(),
           unit: draft.unit.trim(),
           comment: draft.comment.trim(),
         });
         await load();
-        showToast(`Added "${draft.name.trim()}".`, 'success');
+        showToast(`Added "${name}".`, 'success');
       } catch (e) {
         showToast(String(e), 'error');
         throw e;
       }
     },
-    [load, showToast]
+    [globalParams, load, showToast]
   );
 
   const onEdit = useCallback(
     async (originalName: string, draft: DraftRow) => {
+      const name = draft.name.trim();
+      const globalMatch = matchingGlobalName(name, globalParams);
+      if (globalMatch && sanitizeName(name) !== sanitizeName(originalName)) {
+        showToast(
+          `Cannot rename "${originalName}" to "${name}". That name matches the global parameter "${globalMatch}".`,
+          'error'
+        );
+        throw new Error('global-name');
+      }
       try {
         await request<ProjectParam>('project:update', {
           originalName,
-          name: draft.name.trim(),
+          name,
           expression: draft.expression.trim(),
+          unit: draft.unit.trim(),
           comment: draft.comment.trim(),
         });
         await load();
-        showToast(`Updated "${draft.name.trim()}".`, 'success');
+        showToast(`Updated "${name}".`, 'success');
       } catch (e) {
         showToast(String(e), 'error');
         throw e;
       }
     },
-    [load, showToast]
+    [globalParams, load, showToast]
   );
 
   const onDelete = useCallback(
@@ -115,7 +150,7 @@ export function ProjectTab() {
       )}
       <ParamTable
         idPrefix="pp_project"
-        rows={toRows(params)}
+        rows={rows}
         columns={COLUMNS}
         editableFields={['name', 'expression', 'unit', 'comment']}
         canAdd
@@ -123,13 +158,10 @@ export function ProjectTab() {
         onEdit={onEdit}
         onDelete={onDelete}
         refName={(name) => `{{${sanitizeName(name)}}}`}
+        dimensionToggle
         emptyTitle="No parameters in this design"
         emptyMessage="User parameters and model dimensions from the active design show up here. Edit a dimension's expression to change its size."
-        toolbarRight={
-          <button className="pp_btn" title="Reload from design" onClick={() => void load()}>
-            <IconRefresh size={16} />
-          </button>
-        }
+
       />
     </div>
   );

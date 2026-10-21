@@ -4,6 +4,7 @@ import { sendJsLog, sendReady } from '../connector/fusionBridge';
 import type { TabId } from '../types/types';
 import { GlobalTab } from './GlobalTab/GlobalTab';
 import { ProjectTab } from './ProjectTab/ProjectTab';
+import { SettingsDialog } from './SettingsDialog/SettingsDialog';
 import { Tabs } from './Tabs/Tabs';
 import { ToastProvider } from './common/Toast';
 
@@ -41,6 +42,7 @@ function persistWidth(width: number) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('project');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const preferredWidth = useRef(readPreferredWidth());
   const resizingRef = useRef(false);
   const [width, setWidth] = useState(() => fitAppWidth(preferredWidth.current));
@@ -133,12 +135,13 @@ export default function App() {
       style={{ width }}
     >
       <ToastProvider>
-        <Tabs active={activeTab} onChange={setActiveTab} />
+        <Tabs active={activeTab} onChange={setActiveTab} openSettings={() => setSettingsOpen(true)} />
 
         <main id="pp_main" className="pp_main">
           {activeTab === 'global' && <GlobalTab />}
           {activeTab === 'project' && <ProjectTab />}
         </main>
+        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       </ToastProvider>
       <button
         id="pp_app_resize"

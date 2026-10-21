@@ -15,6 +15,7 @@ import {
 import { AssemblyConstraintsTab } from './AssemblyConstraintsTab/AssemblyConstraintsTab';
 import { HelpTab } from './HelpTab/HelpTab';
 import { JointTab } from './JointTab/JointTab';
+import { SettingsTab } from './SettingsTab/SettingsTab';
 import { SketchTab } from './SketchTab/SketchTab';
 import { Tabs } from './Tabs/Tabs';
 import { ToastProvider, useToast } from './common/Toast';
@@ -167,6 +168,7 @@ function AppShell() {
           />
         )}
         <HelpTab active={tab === 'help'} />
+        <SettingsTab active={tab === 'settings'} />
       </main>
     </div>
   );

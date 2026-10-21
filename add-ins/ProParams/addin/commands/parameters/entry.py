@@ -37,8 +37,12 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # ---------------------------------------------------------------------------
 # Data file locations
 # ---------------------------------------------------------------------------
-# Global store now lives in the user data dir (cross-document, app-wide).
-DATA_FILE_GLOBAL = os.path.join(config.USER_DIR_PATH, 'ProParams_global.json')
+# Default global store lives in the user data dir (cross-document, app-wide).
+# A settings file in that same dir can point DATA_FILE_GLOBAL at a shared drive.
+DEFAULT_DATA_FILE_GLOBAL = os.path.join(config.USER_DIR_PATH, 'ProParams_global.json')
+SETTINGS_FILE = os.path.join(config.USER_DIR_PATH, 'ProParams_settings.json')
+DATA_FILE_GLOBAL = DEFAULT_DATA_FILE_GLOBAL
+GLOBAL_PARAMS_FILENAME = 'ProParams_global.json'
 # Legacy stores kept for one-time migration.
 LEGACY_DATA_FILE_CSV = os.path.join(os.path.dirname(os.path.abspath(config.__file__)), 'ProParams_data.csv')
 LEGACY_DATA_FILE_JSON = os.path.join(os.path.dirname(os.path.abspath(config.__file__)), 'ProParams_data.json')
@@ -62,6 +66,7 @@ selected_feature_entity = None
 # Lifecycle
 # ===========================================================================
 def start():
+    _load_settings()
     cmd_def = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_Description, ICON_FOLDER)
     futil.add_handler(cmd_def.commandCreated, command_created)
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
@@ -266,6 +271,21 @@ def route_message(action, data):
         params = data.get('params') if isinstance(data, dict) else None
         return _ok(push_global_to_design(params))
 
+    # Settings -------------------------------------------------------------
+    if action == 'settings:get':
+        return _ok(settings_snapshot())
+    if action == 'settings:browse':
+        current = data.get('globalParamsPath') if isinstance(data, dict) else ''
+        return _ok(browse_params_folder(current if isinstance(current, str) else ''))
+    if action == 'settings:reveal':
+        current = data.get('globalParamsPath') if isinstance(data, dict) else ''
+        return _ok(reveal_params_file(current if isinstance(current, str) else ''))
+    if action == 'settings:set':
+        path = data.get('globalParamsPath') if isinstance(data, dict) else ''
+        snapshot = set_global_params_path(path if isinstance(path, str) else '')
+        _notify_global_reloaded()
+        return _ok(snapshot)
+
     # Project (native design parameters) ----------------------------------
     if action == 'project:list':
         return _ok(list_project_params())
@@ -349,6 +369,188 @@ def _get_design():
 # ===========================================================================
 # Global store (cross-document JSON file)
 # ===========================================================================
+def _paths_equal(left, right):
+    return os.path.normcase(os.path.normpath(left)) == os.path.normcase(os.path.normpath(right))
+
+
+def _load_settings():
+    """Point the global store at the saved path, or the user-dir default."""
+    global DATA_FILE_GLOBAL
+    DATA_FILE_GLOBAL = DEFAULT_DATA_FILE_GLOBAL
+    try:
+        if not os.path.exists(SETTINGS_FILE):
+            return
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        path = data.get('globalParamsPath') if isinstance(data, dict) else None
+        if isinstance(path, str) and path.strip():
+            DATA_FILE_GLOBAL = os.path.normpath(os.path.expanduser(path.strip()))
+    except Exception:
+        futil.log(f"Error loading settings: {traceback.format_exc()}")
+        DATA_FILE_GLOBAL = DEFAULT_DATA_FILE_GLOBAL
+
+
+def _write_settings(path):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'globalParamsPath': path}, f, indent=2)
+    except OSError as e:
+        raise ValueError(f'Could not save settings: {e}') from e
+
+
+def settings_snapshot():
+    return {
+        'globalParamsPath': DATA_FILE_GLOBAL,
+        'defaultPath': DEFAULT_DATA_FILE_GLOBAL,
+        'isCustom': not _paths_equal(DATA_FILE_GLOBAL, DEFAULT_DATA_FILE_GLOBAL),
+    }
+
+
+def _normalize_params_path(path):
+    """Accept a JSON file path or a folder. Empty resets to the default file."""
+    text = (path or '').strip().strip('"')
+    if not text:
+        return DEFAULT_DATA_FILE_GLOBAL
+    text = os.path.expanduser(text)
+    if not os.path.isabs(text):
+        raise ValueError(
+            'Enter a full path, for example \\\\server\\share\\ProParams_global.json'
+        )
+    if os.path.isdir(text) or not os.path.splitext(text)[1]:
+        text = os.path.join(text, GLOBAL_PARAMS_FILENAME)
+    elif os.path.splitext(text)[1].lower() != '.json':
+        text = text + '.json'
+    return os.path.normpath(text)
+
+
+def _validate_params_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except OSError as e:
+        raise ValueError(f'Could not read that file: {e}') from e
+    except json.JSONDecodeError as e:
+        raise ValueError('That file is not valid JSON.') from e
+    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+        raise ValueError('That file is not a ProParams parameter list.')
+
+
+def _notify_global_reloaded():
+    palette = ui.palettes.itemById(PALETTE_ID)
+    if not palette:
+        return
+    try:
+        palette.sendInfoToHTML('loadGlobal', json.dumps(load_global()))
+    except Exception:
+        futil.log(f"_notify_global_reloaded error: {traceback.format_exc()}")
+
+
+def browse_params_folder(current_path):
+    """Pick a folder. The parameters file name is kept when the path is valid."""
+    filename = GLOBAL_PARAMS_FILENAME
+    initial = ''
+    if isinstance(current_path, str) and current_path.strip():
+        try:
+            candidate = _normalize_params_path(current_path)
+        except ValueError:
+            candidate = ''
+        if candidate:
+            filename = os.path.basename(candidate) or filename
+            folder = os.path.dirname(candidate)
+            if os.path.isdir(folder):
+                initial = folder
+
+    dialog = ui.createFolderDialog()
+    dialog.title = 'Folder for the parameters file'
+    if initial:
+        try:
+            dialog.initialDirectory = initial
+        except Exception:
+            futil.log(f"Could not set folder dialog directory: {traceback.format_exc()}")
+
+    if dialog.showDialog() != adsk.core.DialogResults.DialogOK:
+        return {'cancelled': True, 'path': ''}
+    folder = dialog.folder
+    if not folder:
+        return {'cancelled': True, 'path': ''}
+    return {'cancelled': False, 'path': os.path.normpath(os.path.join(folder, filename))}
+
+
+def _open_in_file_manager(path, select_file):
+    """Open the OS file manager, selecting the file when it exists."""
+    path = os.path.normpath(path)
+    if sys.platform == 'win32':
+        if select_file:
+            # The comma is part of Explorer's /select switch.
+            subprocess.Popen(['explorer', '/select,' + path])
+        else:
+            os.startfile(path)
+        return
+    if sys.platform == 'darwin':
+        args = ['open', '-R', path] if select_file else ['open', path]
+        subprocess.Popen(args)
+        return
+    folder = os.path.dirname(path) if select_file else path
+    subprocess.Popen(['xdg-open', folder])
+
+
+def reveal_params_file(path):
+    """Open File Explorer at the parameters file, or its folder if the file is new."""
+    text = (path or '').strip()
+    target = _normalize_params_path(text) if text else DATA_FILE_GLOBAL
+    if os.path.isfile(target):
+        _open_in_file_manager(target, True)
+        return {'opened': True}
+
+    folder = target if os.path.isdir(target) else os.path.dirname(target)
+    if not folder or not os.path.isdir(folder):
+        raise ValueError('That folder does not exist yet.')
+    _open_in_file_manager(folder, False)
+    return {'opened': True}
+
+
+def set_global_params_path(path):
+    """Switch the global store. Existing files are loaded; missing files are created."""
+    global DATA_FILE_GLOBAL, last_mtime
+    normalized = _normalize_params_path(path)
+    if _paths_equal(normalized, DATA_FILE_GLOBAL):
+        _write_settings(normalized)
+        return settings_snapshot()
+
+    parent = os.path.dirname(normalized)
+    if not parent:
+        raise ValueError('Enter a full path to a .json file.')
+
+    if os.path.exists(normalized):
+        _validate_params_file(normalized)
+    else:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            raise ValueError(f'Could not create that folder: {e}') from e
+        if not os.path.isdir(parent):
+            raise ValueError('That folder does not exist.')
+
+    previous = DATA_FILE_GLOBAL
+    previous_mtime = last_mtime
+    current = load_global()
+    DATA_FILE_GLOBAL = normalized
+    try:
+        if not os.path.exists(normalized):
+            save_global(current)
+            if not os.path.exists(normalized):
+                raise ValueError('Could not create the parameters file in that folder.')
+        else:
+            last_mtime = os.path.getmtime(normalized)
+        _write_settings(normalized)
+    except Exception:
+        DATA_FILE_GLOBAL = previous
+        last_mtime = previous_mtime
+        raise
+    return settings_snapshot()
+
+
 def load_global():
     """Return the global params list. Migrates the legacy CSV/JSON on first run."""
     if not os.path.exists(DATA_FILE_GLOBAL):
@@ -508,15 +710,116 @@ def _expression_is_editable(param, is_user):
     return bool(is_driving)
 
 
+def _format_number(number):
+    try:
+        value = float(number)
+    except (TypeError, ValueError):
+        return '' if number is None else str(number)
+    if value != value:
+        return ''
+    text = format(value, '.8f').rstrip('0').rstrip('.')
+    if text in ('', '-0'):
+        return '0'
+    return text
+
+
+def _parameter_unit(param):
+    try:
+        return param.unit or ''
+    except Exception:
+        return ''
+
+
+def _display_value(design, param):
+    """Expression result in the parameter's unit. `param.value` is internal (cm, rad)."""
+    try:
+        internal = param.value
+    except Exception:
+        return ''
+    unit = _parameter_unit(param)
+    if design is not None and unit:
+        try:
+            text = design.unitsManager.formatInternalValue(internal, unit, False)
+            if text:
+                return text
+        except Exception:
+            pass
+    return _format_number(internal)
+
+
+def _dimension_owner(param):
+    """Driving sketch dimension that owns this parameter, when it has a value."""
+    try:
+        owner = param.createdBy
+    except Exception:
+        return None
+    if owner is None:
+        return None
+    try:
+        if owner.isDriving is False:
+            return None
+    except Exception:
+        pass
+    try:
+        owner.value
+    except Exception:
+        return None
+    return owner
+
+
+def _values_close(left, right):
+    return abs(left - right) <= 1e-8 * max(1.0, abs(right))
+
+
+def _write_dimension_value(design, param, expression, unit):
+    """Store the expression's numeric result on the dimension. False when it cannot."""
+    owner = _dimension_owner(param)
+    if owner is None or design is None or not expression:
+        return False
+    units = unit if unit else _parameter_unit(param)
+    try:
+        internal = design.unitsManager.evaluateExpression(expression, units or '')
+    except Exception:
+        futil.log(f"Could not evaluate '{expression}': {traceback.format_exc()}")
+        return False
+    try:
+        current = float(owner.value)
+        already = _values_close(current, internal)
+    except Exception:
+        already = False
+    if already:
+        return True
+    try:
+        saved_expression = param.expression or expression
+    except Exception:
+        saved_expression = expression
+    try:
+        owner.value = internal
+    except Exception:
+        futil.log(f"Could not set dimension value: {traceback.format_exc()}")
+        return False
+    # Writing the dimension value replaces the expression with a literal.
+    # Put the user's expression back when the dimension keeps the result.
+    if saved_expression:
+        try:
+            if (param.expression or '') != saved_expression:
+                param.expression = saved_expression
+        except Exception:
+            futil.log(f"Could not restore expression '{saved_expression}': {traceback.format_exc()}")
+        try:
+            if not _values_close(float(owner.value), internal):
+                owner.value = internal
+        except Exception:
+            futil.log(f"Dimension value did not stick: {traceback.format_exc()}")
+    return True
+
+
 def _serialize_param(param, is_user, is_deletable):
     try:
         expression = param.expression
     except Exception:
         expression = ''
-    try:
-        value = str(param.value)
-    except Exception:
-        value = ''
+    value = _display_value(_get_design(), param)
     try:
         unit = param.unit
     except Exception:
@@ -537,15 +840,30 @@ def _serialize_param(param, is_user, is_deletable):
     }
 
 
+def _global_user_param_names():
+    """Names the global store writes into a design. They stay out of the project list."""
+    names = set()
+    for param in load_global():
+        name = sanitize_name(param.get('name', ''))
+        if name:
+            names.add(name)
+    return names
+
+
 def list_project_params():
     design = _get_design()
     if not design:
         return []
 
+    # Pushing the global store creates user parameters so expressions can
+    # reference them. Those belong on the Global tab, not in this list.
+    global_names = _global_user_param_names()
     result = []
     user_params = design.userParameters
     for i in range(user_params.count):
         p = user_params.item(i)
+        if p.name in global_names:
+            continue
         result.append(_serialize_param(p, True, p.isDeletable))
 
     # Model parameters belong to components, not Design. allParameters is the
@@ -571,6 +889,10 @@ def add_project_param(data):
     comment = data.get('comment', '') or ''
     if not name or not expression:
         raise ValueError('Name and expression are required.')
+    if name in _global_user_param_names():
+        raise ValueError(
+            f"Cannot create '{name}'. That name matches a global parameter."
+        )
 
     user_params = design.userParameters
     if user_params.itemByName(name):
@@ -579,6 +901,46 @@ def add_project_param(data):
     value_input = adsk.core.ValueInput.createByString(expression)
     new_param = user_params.add(name, value_input, unit, comment)
     return _serialize_param(new_param, True, new_param.isDeletable)
+
+
+def _assign_expression_and_unit(param, expression, unit):
+    """Set a user parameter's expression and unit as a compatible pair.
+
+    Fusion rejects a unitless expression on a unit parameter, and the reverse.
+    Try the unit first so a bare number is reinterpreted, then the expression.
+    If that is refused, write the expression (it already names the unit) and
+    then the unit.
+    """
+    unit = unit or ''
+    try:
+        current_unit = param.unit or ''
+    except Exception:
+        current_unit = ''
+    try:
+        current_expression = param.expression or ''
+    except Exception:
+        current_expression = ''
+
+    if expression == current_expression and unit == current_unit:
+        return
+
+    if unit == current_unit:
+        if expression != current_expression:
+            param.expression = expression
+        return
+
+    try:
+        param.unit = unit
+        if expression and expression != (param.expression or ''):
+            param.expression = expression
+        return
+    except Exception:
+        futil.log(f"Setting unit before expression failed: {traceback.format_exc()}")
+
+    if expression and expression != (param.expression or ''):
+        param.expression = expression
+    if (param.unit or '') != unit:
+        param.unit = unit
 
 
 def update_project_param(data):
@@ -596,17 +958,36 @@ def update_project_param(data):
         raise ValueError(f"'{original}' is a driven dimension and cannot be edited.")
 
     new_name = sanitize_name(data.get('name', original))
+    if new_name and new_name != param.name and new_name in _global_user_param_names():
+        raise ValueError(
+            f"Cannot rename '{original}' to '{new_name}'. That name matches a global parameter."
+        )
     expression = data.get('expression', param.expression)
     comment = data.get('comment', '')
+    unit_provided = isinstance(data, dict) and 'unit' in data
 
+    unit_for_value = (data.get('unit') or '') if unit_provided else _parameter_unit(param)
     try:
-        if expression and expression != param.expression:
+        if is_user and unit_provided:
+            _assign_expression_and_unit(param, expression, data.get('unit') or '')
+        elif expression and expression != param.expression:
             param.expression = expression
         param.comment = comment or ''
         if new_name and new_name != param.name:
             param.name = new_name
     except Exception as e:
-        raise ValueError(str(e)) from e
+        wrote = (not is_user) and _write_dimension_value(design, param, expression, unit_for_value)
+        if not wrote:
+            raise ValueError(str(e)) from e
+        try:
+            param.comment = comment or ''
+            if new_name and new_name != param.name:
+                param.name = new_name
+        except Exception as name_error:
+            raise ValueError(str(name_error)) from name_error
+    else:
+        if not is_user:
+            _write_dimension_value(design, param, expression, unit_for_value)
 
     still_user = design.userParameters.itemByName(param.name) is not None
     return _serialize_param(param, still_user, param.isDeletable if still_user else False)
@@ -665,7 +1046,7 @@ def _feature_params_for_entity(entity):
             params.append({
                 'name': up.name,
                 'expression': up.expression,
-                'value': str(up.value),
+                'value': _display_value(design, up),
                 'unit': up.unit,
                 'comment': up.comment,
             })
@@ -759,8 +1140,11 @@ def update_feature_param(data):
     new_name = sanitize_name(data.get('name', original))
     expression = data.get('expression', param.expression)
     comment = data.get('comment', '')
+    unit_provided = isinstance(data, dict) and 'unit' in data
 
-    if expression and expression != param.expression:
+    if unit_provided:
+        _assign_expression_and_unit(param, expression, data.get('unit') or '')
+    elif expression and expression != param.expression:
         param.expression = expression
     param.comment = comment or ''
     if new_name and new_name != param.name:
