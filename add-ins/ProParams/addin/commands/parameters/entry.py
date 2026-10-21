@@ -665,19 +665,17 @@ def push_global_to_design(params=None):
         name = sanitize_name(p.get('name', ''))
         if not name:
             continue
-        expression = p.get('expression', p.get('value', ''))
+        expression = _normalize_expression(p.get('expression', p.get('value', '')))
         unit = p.get('unit', '') or ''
         comment = p.get('comment', '') or ''
         try:
             existing = user_params.itemByName(name)
             if existing:
-                if existing.expression != expression and expression:
-                    existing.expression = expression
+                _assign_expression_and_unit(existing, expression, unit or _parameter_unit(existing))
                 existing.comment = comment
                 updated += 1
             else:
-                value_input = adsk.core.ValueInput.createByString(expression)
-                user_params.add(name, value_input, unit, comment)
+                _create_user_parameter(user_params, name, expression, unit, comment)
                 created += 1
         except Exception as e:
             errors.append(f"{name}: {e}")
@@ -884,7 +882,7 @@ def add_project_param(data):
     if not design:
         raise RuntimeError('No active design.')
     name = sanitize_name(data.get('name', ''))
-    expression = data.get('expression', '')
+    expression = _normalize_expression(data.get('expression', ''))
     unit = data.get('unit', '') or ''
     comment = data.get('comment', '') or ''
     if not name or not expression:
@@ -898,49 +896,325 @@ def add_project_param(data):
     if user_params.itemByName(name):
         raise ValueError(f"A parameter named '{name}' already exists.")
 
-    value_input = adsk.core.ValueInput.createByString(expression)
-    new_param = user_params.add(name, value_input, unit, comment)
+    new_param = _create_user_parameter(user_params, name, expression, unit, comment)
     return _serialize_param(new_param, True, new_param.isDeletable)
 
 
-def _assign_expression_and_unit(param, expression, unit):
-    """Set a user parameter's expression and unit as a compatible pair.
+# One number, optionally one unit token. Anything else is a formula.
+_SIMPLE_VALUE = re.compile(
+    r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?'
+    r'(?:[ \t]*[A-Za-zμµ°"″\'′][A-Za-z0-9μµ°"″\'′/^._-]*)?$'
+)
 
-    Fusion rejects a unitless expression on a unit parameter, and the reverse.
-    Try the unit first so a bare number is reinterpreted, then the expression.
-    If that is refused, write the expression (it already names the unit) and
-    then the unit.
+
+def _normalize_expression(expression):
+    """Fusion has no spreadsheet `=`. One leading equals sign is removed."""
+    text = '' if expression is None else str(expression).strip()
+    if text.startswith('=') and not text.startswith('=='):
+        return text[1:].strip()
+    return text
+
+
+def _expression_is_formula(expression):
+    text = (expression or '').strip()
+    if not text:
+        return False
+    return _SIMPLE_VALUE.fullmatch(text) is None
+
+
+def _read_expression(param):
+    try:
+        return param.expression or ''
+    except Exception:
+        return ''
+
+
+def _expression_evaluates(design, expression, unit):
+    if design is None or not expression:
+        return False
+    try:
+        design.unitsManager.evaluateExpression(expression, unit or '')
+        return True
+    except Exception:
+        return False
+
+
+# Typed unit words and symbols that Fusion's converter may not accept directly.
+_UNIT_ALIASES = {
+    '"': 'in', '″': 'in', '“': 'in', '”': 'in',
+    "'": 'ft', '′': 'ft', '‘': 'ft', '’': 'ft',
+    '°': 'deg',
+    'inch': 'in', 'inches': 'in',
+    'foot': 'ft', 'feet': 'ft',
+    'degree': 'deg', 'degrees': 'deg',
+    'millimeter': 'mm', 'millimetre': 'mm',
+}
+
+# A number and the unit token written on it. Bare numbers and parameter names are ignored.
+_NUMBER_UNIT = re.compile(
+    r'(?<![A-Za-z0-9_.])'
+    r'([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)'
+    r'[ \t]*'
+    r'([A-Za-zμµ°"″\'′“”‘’][A-Za-z0-9μµ°"″\'′/^._-]*)'
+)
+
+
+def _same_unit(left, right):
+    return (left or '').lower() == (right or '').lower()
+
+
+def _unit_sources(token):
+    sources = []
+    raw = (token or '').strip()
+    if raw:
+        sources.append(raw)
+    alias = _UNIT_ALIASES.get(raw)
+    if alias is None:
+        alias = _UNIT_ALIASES.get(raw.lower())
+    if alias and alias not in sources:
+        sources.append(alias)
+    return sources
+
+
+def _literal_in_unit(design, number, token, unit):
+    """Value of `number token` measured in `unit`, or None when it cannot convert."""
+    for source in _unit_sources(token):
+        if _same_unit(source, unit):
+            return _format_number(float(number))
+        internal = None
+        for default_unit in (source, unit):
+            try:
+                internal = design.unitsManager.evaluateExpression(
+                    f'{number} {source}', default_unit
+                )
+                break
+            except Exception:
+                internal = None
+        if internal is None:
+            continue
+        try:
+            text = design.unitsManager.formatInternalValue(internal, unit, False)
+        except Exception:
+            continue
+        cleaned = str(text or '').strip()
+        if not cleaned:
+            continue
+        if cleaned.lower().endswith(unit.lower()):
+            cleaned = cleaned[: -len(unit)].strip()
+        try:
+            return _format_number(float(cleaned.replace(',', '')))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _rewrite_literals(design, expression, unit, suffix):
+    """Rewrite unit literals into `unit`.
+
+    Fusion rejects `10 mm + 5 in` with "Expression is invalid". The same math
+    with one unit, `10 mm + 127 mm` or `10 + 127`, is accepted. Parameter names
+    are left as written. Returns None when a bare rewrite would drop a unit
+    that could not be converted.
+    """
+    if not design or not unit or unit == 'Text' or not expression:
+        return None
+    pieces = []
+    cursor = 0
+    changed = False
+    for match in _NUMBER_UNIT.finditer(expression):
+        number, token = match.group(1), match.group(2)
+        sources = _unit_sources(token)
+        same = any(_same_unit(source, unit) for source in sources)
+        if same:
+            replacement = _format_number(float(number)) if not suffix else None
+        else:
+            converted = _literal_in_unit(design, number, token, unit)
+            if converted is None:
+                if not suffix:
+                    return None
+                continue
+            replacement = f'{converted} {unit}' if suffix else converted
+        if replacement is None:
+            continue
+        pieces.append(expression[cursor:match.start()])
+        pieces.append(replacement)
+        cursor = match.end()
+        changed = True
+    if not changed:
+        return None
+    pieces.append(expression[cursor:])
+    return ''.join(pieces)
+
+
+def _has_foreign_unit(expression, unit):
+    """True when a literal uses a unit other than the parameter unit."""
+    if not unit:
+        return False
+    for match in _NUMBER_UNIT.finditer(expression or ''):
+        sources = _unit_sources(match.group(2))
+        if sources and not any(_same_unit(source, unit) for source in sources):
+            return True
+    return False
+
+
+def _expression_attempts(design, expression, unit):
+    """Forms to try, rewritten ones first when the text mixes units.
+
+    Assigning `10 mm + 5 in` directly makes Fusion show "Expression is invalid".
+    The converted forms are sent instead of that string.
+    """
+    rewritten = []
+    for suffix in (True, False):
+        candidate = _rewrite_literals(design, expression, unit, suffix)
+        if candidate and candidate not in rewritten:
+            rewritten.append(candidate)
+    if rewritten and _has_foreign_unit(expression, unit):
+        return rewritten
+    attempts = [expression]
+    for candidate in rewritten:
+        if candidate not in attempts:
+            attempts.append(candidate)
+    return attempts
+
+
+def _try_set_unit(param, unit):
+    """Set the parameter unit. Fusion's UserParameter.unit is often read-only.
+
+    Returns True when the parameter already uses `unit` or the assignment stuck.
+    A failed assignment is ignored so the expression can still be saved.
     """
     unit = unit or ''
+    if _parameter_unit(param) == unit:
+        return True
     try:
-        current_unit = param.unit or ''
+        param.unit = unit
     except Exception:
-        current_unit = ''
+        futil.log(
+            f"Parameter unit is read-only; left it as '{_parameter_unit(param)}': {traceback.format_exc()}"
+        )
+        return _parameter_unit(param) == unit
+    return _parameter_unit(param) == unit
+
+
+def _write_expression(param, expression, unit):
+    """Store `expression`. Mixed-unit formulas are rewritten into the result unit.
+
+    Fusion reports "Expression is invalid" for `10 mm + 5 in` even though the
+    lengths are compatible. Each literal is converted into the parameter unit
+    and the formula is saved as `10 mm + 127 mm`. The parameter unit itself is
+    not assigned here; on current Fusion that property has no setter.
+    """
+    if not expression or _read_expression(param) == expression:
+        return
+    design = _get_design()
+    target = _parameter_unit(param) or unit or ''
+    attempts = _expression_attempts(design, expression, target)
+    first_error = None
+    for candidate in attempts:
+        try:
+            if _read_expression(param) != candidate:
+                param.expression = candidate
+            return
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+    if first_error is None:
+        return
+    if not _expression_is_formula(expression) or not target or target == 'Text':
+        raise first_error
+    stored = attempts[-1]
+    if not _expression_evaluates(design, stored, target):
+        futil.log(
+            f"Expression rejected: {expression!r} unit={target!r} attempts={attempts!r}: {first_error}",
+            adsk.core.LogLevels.ErrorLogLevel,
+        )
+        raise first_error
+    saved = _read_expression(param)
+    placeholder_unit = _parameter_unit(param) or target
     try:
-        current_expression = param.expression or ''
+        param.expression = f'0 {placeholder_unit}' if placeholder_unit else '0'
+        param.expression = stored
     except Exception:
-        current_expression = ''
+        futil.log(f"Priming expression '{expression}' failed: {traceback.format_exc()}")
+        try:
+            if saved and _read_expression(param) != saved:
+                param.expression = saved
+        except Exception:
+            futil.log(f"Could not restore expression '{saved}': {traceback.format_exc()}")
+        raise first_error
+
+
+def _assign_expression_and_unit(param, expression, unit):
+    """Set a user parameter's expression and, when Fusion allows it, its unit.
+
+    A plain number is applied by changing the unit first, so `5` becomes `5 mm`.
+    A formula is written in the parameter's current unit. `10 mm + 5 in` is
+    converted before it is stored. The unit property has no setter on current
+    Fusion, so a refused unit change does not fail the save.
+    """
+    expression = _normalize_expression(expression)
+    unit = unit or ''
+    current_unit = _parameter_unit(param)
+    current_expression = _read_expression(param)
 
     if expression == current_expression and unit == current_unit:
         return
 
-    if unit == current_unit:
-        if expression != current_expression:
-            param.expression = expression
+    if _expression_is_formula(expression):
+        target = current_unit
+        if unit and unit != current_unit and _try_set_unit(param, unit):
+            target = unit
+        _write_expression(param, expression, target or unit)
         return
 
+    if unit != current_unit and _try_set_unit(param, unit):
+        current_unit = _parameter_unit(param)
+
+    if not expression or expression == _read_expression(param):
+        return
     try:
-        param.unit = unit
-        if expression and expression != (param.expression or ''):
-            param.expression = expression
-        return
-    except Exception:
-        futil.log(f"Setting unit before expression failed: {traceback.format_exc()}")
-
-    if expression and expression != (param.expression or ''):
         param.expression = expression
-    if (param.unit or '') != unit:
-        param.unit = unit
+    except Exception:
+        futil.log(f"Setting expression failed: {traceback.format_exc()}")
+        _write_expression(param, expression, current_unit or unit)
+
+
+def _create_user_parameter(user_params, name, expression, unit, comment):
+    """Add a user parameter. A mixed-unit formula is stored in `unit`."""
+    expression = _normalize_expression(expression)
+    unit = unit or ''
+    design = _get_design()
+    attempts = _expression_attempts(design, expression, unit)
+    first_error = None
+    for attempt in attempts:
+        try:
+            value_input = adsk.core.ValueInput.createByString(attempt)
+            return user_params.add(name, value_input, unit, comment)
+        except Exception as error:
+            first_error = error
+    if (
+        first_error is None
+        or not unit
+        or unit == 'Text'
+        or not _expression_is_formula(expression)
+        or not _expression_evaluates(design, attempts[-1], unit)
+    ):
+        if first_error is None:
+            raise RuntimeError(f"Could not create parameter '{name}'.")
+        raise first_error
+    placeholder = adsk.core.ValueInput.createByString(f'0 {unit}')
+    created = user_params.add(name, placeholder, unit, comment)
+    try:
+        _write_expression(created, attempts[-1], unit)
+    except Exception:
+        try:
+            created.deleteMe()
+        except Exception:
+            futil.log(
+                f"Could not delete placeholder parameter '{name}': {traceback.format_exc()}"
+            )
+        raise first_error
+    return created
 
 
 def update_project_param(data):
@@ -962,7 +1236,7 @@ def update_project_param(data):
         raise ValueError(
             f"Cannot rename '{original}' to '{new_name}'. That name matches a global parameter."
         )
-    expression = data.get('expression', param.expression)
+    expression = _normalize_expression(data.get('expression', _read_expression(param)))
     comment = data.get('comment', '')
     unit_provided = isinstance(data, dict) and 'unit' in data
 
@@ -970,8 +1244,8 @@ def update_project_param(data):
     try:
         if is_user and unit_provided:
             _assign_expression_and_unit(param, expression, data.get('unit') or '')
-        elif expression and expression != param.expression:
-            param.expression = expression
+        elif expression and expression != _read_expression(param):
+            _write_expression(param, expression, unit_for_value or _parameter_unit(param))
         param.comment = comment or ''
         if new_name and new_name != param.name:
             param.name = new_name
@@ -1105,7 +1379,7 @@ def add_feature_param(data):
     entity = _require_selected_entity()
 
     name = sanitize_name(data.get('name', ''))
-    expression = data.get('expression', '')
+    expression = _normalize_expression(data.get('expression', ''))
     unit = data.get('unit', '') or ''
     comment = data.get('comment', '') or ''
     if not name or not expression:
@@ -1115,12 +1389,10 @@ def add_feature_param(data):
     existing = user_params.itemByName(name)
     if existing:
         # Reuse the existing user parameter but associate it with this entity.
-        if expression and existing.expression != expression:
-            existing.expression = expression
+        _assign_expression_and_unit(existing, expression, unit or _parameter_unit(existing))
         existing.comment = comment
     else:
-        value_input = adsk.core.ValueInput.createByString(expression)
-        user_params.add(name, value_input, unit, comment)
+        _create_user_parameter(user_params, name, expression, unit, comment)
 
     _tag_entity(entity, name)
     return read_feature_selection()
@@ -1138,7 +1410,7 @@ def update_feature_param(data):
         raise ValueError(f"Parameter '{original}' not found.")
 
     new_name = sanitize_name(data.get('name', original))
-    expression = data.get('expression', param.expression)
+    expression = _normalize_expression(data.get('expression', param.expression))
     comment = data.get('comment', '')
     unit_provided = isinstance(data, dict) and 'unit' in data
 

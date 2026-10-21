@@ -3,10 +3,6 @@ out/
 dist/
 node_modules/
 
-# VS Code
-.vscode/
-.vscode-test/
-
 # Python
 __pycache__/
 *.py[cod]

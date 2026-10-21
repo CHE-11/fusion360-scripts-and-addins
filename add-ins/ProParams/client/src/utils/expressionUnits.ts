@@ -7,6 +7,11 @@ import { FUSION_UNITS } from '../data/fusionUnits';
  * `5"`, `5 in`, and `5 mm` map to the matching Fusion unit. A value with no
  * unit token stays unitless until the user picks one. Picking `mm` for `5`
  * rewrites the expression to `5 mm`.
+ *
+ * A formula such as `10 mm + 5 in` is stored as written. Its parameter unit
+ * is the result unit, not the last term. A new parameter with no unit yet
+ * takes the first unit in the formula. A leading `=` is spreadsheet syntax
+ * and is removed before Fusion sees the expression.
  */
 
 type Alias = {
@@ -111,20 +116,33 @@ function matchUnitAt(text: string): { symbol: string; consumed: number } | null 
   return null;
 }
 
+/** Fusion symbols attached to numbers in `expression`, in written order. */
+function unitsInExpression(expression: string): string[] {
+  NUMBER_RE.lastIndex = 0;
+  const found: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = NUMBER_RE.exec(expression))) {
+    if (!isValueBoundary(expression[match.index - 1])) continue;
+    const unit = matchUnitAt(expression.slice(match.index + match[0].length));
+    if (unit) found.push(unit.symbol);
+  }
+  return found;
+}
+
 /**
  * Unit written on a number in the expression (`5 mm`, `5"`, `2 * 5 in`).
  * The last one wins. Returns undefined when the expression is unitless.
  */
 export function guessUnitFromExpression(expression: string): string | undefined {
-  NUMBER_RE.lastIndex = 0;
-  let found: string | undefined;
-  let match: RegExpExecArray | null;
-  while ((match = NUMBER_RE.exec(expression))) {
-    if (!isValueBoundary(expression[match.index - 1])) continue;
-    const unit = matchUnitAt(expression.slice(match.index + match[0].length));
-    if (unit) found = unit.symbol;
-  }
-  return found;
+  const found = unitsInExpression(expression);
+  return found.length > 0 ? found[found.length - 1] : undefined;
+}
+
+/** Drop one leading `=`. Fusion expressions are not spreadsheet formulas. */
+function withoutLeadingEquals(expression: string): string {
+  const trimmed = expression.trim();
+  if (!trimmed.startsWith('=') || trimmed.startsWith('==')) return expression;
+  return trimmed.slice(1).trim();
 }
 
 type SimpleValue = {
@@ -167,10 +185,18 @@ export function syncExpressionUnit(
   unit: string,
   source: 'expression' | 'unit'
 ): { expression: string; unit: string } {
+  expression = withoutLeadingEquals(expression);
   if (source === 'unit') {
     return { expression: applyUnitToExpression(expression, unit), unit };
   }
-  const guessed = guessUnitFromExpression(expression);
-  if (guessed) return { expression, unit: guessed };
+  // `10 mm + 5 in` is a formula. The last unit is not the result unit, and
+  // sending that unit to Fusion makes the save fail with "Expression is invalid".
+  const simple = parseSimpleValue(expression);
+  if (!simple) {
+    if (unit) return { expression, unit };
+    const first = unitsInExpression(expression)[0];
+    return { expression, unit: first ?? unit };
+  }
+  if (simple.symbol) return { expression, unit: simple.symbol };
   return { expression: applyUnitToExpression(expression, unit), unit };
 }

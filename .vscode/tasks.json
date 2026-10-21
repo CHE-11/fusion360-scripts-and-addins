@@ -1,0 +1,155 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ProParams - Deps",
+      "type": "shell",
+      "command": "pnpm install",
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/ProParams/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#8fbce1"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "ProParams - Start",
+      "type": "shell",
+      "command": "pnpm start",
+      "isBackground": true,
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/ProParams/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#cef413"
+        }
+      },
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "Local:"
+        }
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "ProParams - Build",
+      "type": "shell",
+      "command": "pnpm build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/ProParams/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#c49816"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "|",
+      "type": "shell",
+      "command": "",
+      "options": {
+        "statusbar": {
+          "hide": false,
+          "color": "#ffffff"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": false
+      }
+    },
+    {
+      "label": "CONstrainer - Deps",
+      "type": "shell",
+      "command": "pnpm install",
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/CONstrainer/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#8fbce1"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "CONstrainer - Start",
+      "type": "shell",
+      "command": "pnpm start",
+      "isBackground": true,
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/CONstrainer/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#cef413"
+        }
+      },
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "Local:"
+        }
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "CONstrainer - Build",
+      "type": "shell",
+      "command": "pnpm build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/add-ins/CONstrainer/client",
+        "statusbar": {
+          "hide": false,
+          "color": "#c49816"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+
+  ]
+}
