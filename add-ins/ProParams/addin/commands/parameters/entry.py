@@ -49,6 +49,10 @@ LEGACY_DATA_FILE_JSON = os.path.join(os.path.dirname(os.path.abspath(config.__fi
 
 # Attribute group used to associate user parameters with a selected entity.
 FEATURE_ATTR_GROUP = 'ProParamsFeature'
+# Alternate values for a parameter. `values` holds the JSON list when it fits
+# in one attribute. Longer lists are split across v0, v1, ...
+VARIATIONS_ATTR_GROUP = 'ProParamsVariations'
+_VARIATION_CHUNK = 200
 
 WATCHER_EVENT_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_FileWatcher'
 
@@ -295,6 +299,15 @@ def route_message(action, data):
         return _ok(update_project_param(data))
     if action == 'project:delete':
         return _ok(delete_project_param(data))
+    if action == 'project:setVariations':
+        return _ok(set_project_variations(data))
+    if action == 'project:defaultExportFolder':
+        return _ok({'path': _downloads_folder()})
+    if action == 'project:browseExportFolder':
+        current = data.get('folder') if isinstance(data, dict) else ''
+        return _ok(browse_export_folder(current if isinstance(current, str) else ''))
+    if action == 'project:exportVariations':
+        return _ok(export_project_variations(data))
 
     # Feature (entity-attached params) ------------------------------------
     if action == 'feature:readSelection':
@@ -822,6 +835,8 @@ def _serialize_param(param, is_user, is_deletable):
         unit = param.unit
     except Exception:
         unit = ''
+    if not unit and _is_text_param(param):
+        unit = 'Text'
     try:
         comment = param.comment
     except Exception:
@@ -835,6 +850,7 @@ def _serialize_param(param, is_user, is_deletable):
         'isUserParam': is_user,
         'isDeletable': is_deletable,
         'isEditable': _expression_is_editable(param, is_user),
+        'variations': _read_variations(param),
     }
 
 
@@ -1155,6 +1171,8 @@ def _assign_expression_and_unit(param, expression, unit):
     expression = _normalize_expression(expression)
     unit = unit or ''
     current_unit = _parameter_unit(param)
+    if unit == 'Text' or current_unit == 'Text':
+        expression = _quote_text_expression(expression)
     current_expression = _read_expression(param)
 
     if expression == current_expression and unit == current_unit:
@@ -1183,6 +1201,8 @@ def _create_user_parameter(user_params, name, expression, unit, comment):
     """Add a user parameter. A mixed-unit formula is stored in `unit`."""
     expression = _normalize_expression(expression)
     unit = unit or ''
+    if unit == 'Text':
+        expression = _quote_text_expression(expression)
     design = _get_design()
     attempts = _expression_attempts(design, expression, unit)
     first_error = None
@@ -1279,6 +1299,461 @@ def delete_project_param(data):
         raise ValueError(f"Parameter '{name}' is in use and cannot be deleted.")
     param.deleteMe()
     return {'name': name}
+
+
+# ===========================================================================
+# Parameter variations (cartesian export)
+# ===========================================================================
+# Fusion text literals are single-quoted: 'Hello'. Double quotes are invalid.
+_SINGLE_QUOTED = re.compile(r"^'(?:''|[^'])*'$")
+_DOUBLE_QUOTED = re.compile(r'^"(?:\\.|[^"\\])*"$')
+_TEXT_FORMULA = re.compile(r'[+;()]|==|!=|<=|>=|&&|\|\|')
+_BARE_NUMBER = re.compile(r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
+_ILLEGAL_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _normalize_text_quotes(text):
+    return (
+        text.replace('\u201c', '"')
+        .replace('\u201d', '"')
+        .replace('\u2018', "'")
+        .replace('\u2019', "'")
+    )
+
+
+def _is_text_param(param):
+    """Text parameters use the unit Text, or a quoted expression when unit is blank."""
+    unit = _parameter_unit(param)
+    if unit == 'Text':
+        return True
+    if unit:
+        return False
+    expression = _read_expression(param).strip()
+    return (
+        _SINGLE_QUOTED.fullmatch(expression) is not None
+        or _DOUBLE_QUOTED.fullmatch(expression) is not None
+    )
+
+
+def _quote_text_expression(value):
+    """Turn a text value into a Fusion literal. Formulas such as text1 + text2 stay as written."""
+    text = _normalize_text_quotes('' if value is None else str(value).strip())
+    if not text:
+        return "''"
+    if _SINGLE_QUOTED.fullmatch(text):
+        return text
+    if _DOUBLE_QUOTED.fullmatch(text):
+        plain = text[1:-1].replace('\\\\', '\\').replace('\\"', '"')
+        return "'" + plain.replace("'", "''") + "'"
+    if _TEXT_FORMULA.search(text):
+        return text
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _text_display(expression):
+    """Characters inside a text literal. Formulas are unchanged."""
+    text = _normalize_text_quotes((expression or '').strip())
+    if _SINGLE_QUOTED.fullmatch(text):
+        return text[1:-1].replace("''", "'")
+    if _DOUBLE_QUOTED.fullmatch(text):
+        return text[1:-1].replace('\\\\', '\\').replace('\\"', '"')
+    return expression or ''
+
+
+def _prepare_variation_value(param, value):
+    """Expression to store and apply. Text is quoted. A bare number takes the unit."""
+    text = '' if value is None else str(value).strip()
+    if not text:
+        return ''
+    if _is_text_param(param):
+        return _quote_text_expression(text)
+    text = _normalize_expression(text)
+    unit = _parameter_unit(param)
+    if unit and unit != 'Text' and _BARE_NUMBER.fullmatch(text):
+        return f'{text} {unit}'
+    return text
+
+
+def _variation_attrs(param):
+    try:
+        return param.attributes
+    except Exception:
+        return None
+
+
+def _clear_variation_attrs(param):
+    attrs = _variation_attrs(param)
+    if attrs is None:
+        return
+    doomed = []
+    for i in range(attrs.count):
+        attr = attrs.item(i)
+        if attr.groupName == VARIATIONS_ATTR_GROUP:
+            doomed.append(attr)
+    for attr in doomed:
+        try:
+            attr.deleteMe()
+        except Exception:
+            futil.log(f"Could not clear variation attribute: {traceback.format_exc()}")
+
+
+def _read_variations(param):
+    attrs = _variation_attrs(param)
+    if attrs is None:
+        return []
+    try:
+        chunks = []
+        index = 0
+        while True:
+            attr = attrs.itemByName(VARIATIONS_ATTR_GROUP, f'v{index}')
+            if not attr:
+                break
+            chunks.append(attr.value or '')
+            index += 1
+        raw = ''.join(chunks)
+        if not raw:
+            legacy = attrs.itemByName(VARIATIONS_ATTR_GROUP, 'values')
+            raw = (legacy.value or '') if legacy else ''
+        if not raw:
+            return []
+        data = json.loads(raw)
+    except Exception:
+        futil.log(f"Could not read variations on '{getattr(param, 'name', '')}': {traceback.format_exc()}")
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item.strip() for item in data if isinstance(item, str) and item.strip()]
+
+
+def _add_variation_payload(attrs, values):
+    payload = json.dumps(values)
+    if len(payload) <= _VARIATION_CHUNK:
+        attrs.add(VARIATIONS_ATTR_GROUP, 'values', payload)
+        return
+    for index in range(0, len(payload), _VARIATION_CHUNK):
+        chunk = payload[index:index + _VARIATION_CHUNK]
+        attrs.add(VARIATIONS_ATTR_GROUP, f'v{index // _VARIATION_CHUNK}', chunk)
+
+
+def _write_variations(param, values):
+    """Store the JSON list on the parameter. Long lists are split under the 256-character attribute cap."""
+    previous = _read_variations(param)
+    _clear_variation_attrs(param)
+    if not values:
+        return
+    attrs = _variation_attrs(param)
+    if attrs is None:
+        raise ValueError(f"Cannot store variations on '{param.name}'.")
+    try:
+        _add_variation_payload(attrs, values)
+    except Exception:
+        futil.log(f"Could not store variations on '{param.name}': {traceback.format_exc()}")
+        _clear_variation_attrs(param)
+        restored = _variation_attrs(param)
+        if previous and restored is not None:
+            try:
+                _add_variation_payload(restored, previous)
+            except Exception:
+                futil.log(f"Could not restore variations on '{param.name}': {traceback.format_exc()}")
+        raise
+
+
+def set_project_variations(data):
+    design = _get_design()
+    if not design:
+        raise RuntimeError('No active design.')
+    if not isinstance(data, dict):
+        raise ValueError('project:setVariations expects a parameter name and values.')
+    name = data.get('name', '')
+    param = design.allParameters.itemByName(name) if name else None
+    if not param:
+        raise ValueError(f"Parameter '{name}' not found.")
+    is_user = design.userParameters.itemByName(name) is not None
+    if not _expression_is_editable(param, is_user):
+        raise ValueError(f"'{name}' is a driven dimension and cannot store variations.")
+    raw_values = data.get('values')
+    if not isinstance(raw_values, list):
+        raise ValueError('project:setVariations expects a list of values.')
+    prepared = []
+    for value in raw_values:
+        if not isinstance(value, str):
+            continue
+        text = _prepare_variation_value(param, value)
+        if text:
+            prepared.append(text)
+    _write_variations(param, prepared)
+    return _serialize_param(param, is_user, param.isDeletable if is_user else False)
+
+
+def _variation_parameters(design):
+    """Editable parameters that have a variation list, in project-list order.
+
+    User parameters that belong to the global store stay off the Project tab,
+    so they stay out of this product too.
+    """
+    found = []
+    seen = set()
+    global_names = _global_user_param_names()
+
+    def consider(param, is_user):
+        if param is None or param.name in seen:
+            return
+        if is_user and param.name in global_names:
+            return
+        if not _read_variations(param):
+            return
+        if not _expression_is_editable(param, is_user):
+            return
+        seen.add(param.name)
+        found.append(param)
+
+    user_params = design.userParameters
+    for i in range(user_params.count):
+        consider(user_params.item(i), True)
+    all_params = design.allParameters
+    for i in range(all_params.count):
+        model_param = adsk.fusion.ModelParameter.cast(all_params.item(i))
+        if model_param:
+            consider(model_param, False)
+    return found
+
+
+def _apply_param_expression(design, param, expression, unit):
+    """Write one expression the same way a project-parameter edit does."""
+    is_user = design.userParameters.itemByName(param.name) is not None
+    expression = _normalize_expression(expression)
+    if is_user:
+        _assign_expression_and_unit(param, expression, unit or _parameter_unit(param))
+        return
+    unit_for_value = unit or _parameter_unit(param)
+    try:
+        if expression and expression != _read_expression(param):
+            _write_expression(param, expression, unit_for_value)
+    except Exception as error:
+        wrote = _write_dimension_value(design, param, expression, unit_for_value)
+        if not wrote:
+            raise ValueError(str(error)) from error
+    else:
+        _write_dimension_value(design, param, expression, unit_for_value)
+
+
+def _filename_token(text):
+    cleaned = _ILLEGAL_FILENAME.sub('', '' if text is None else str(text))
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .')
+    return cleaned or 'value'
+
+
+def _variation_label(params, values):
+    bits = []
+    for param, value in zip(params, values):
+        shown = _text_display(_prepare_variation_value(param, value))
+        bits.append(f'{param.name}={shown}')
+    return ', '.join(bits)
+
+
+def _variation_filename(document_name, params, values, ext):
+    doc = _filename_token(document_name or 'Design')
+    if not document_name or not str(document_name).strip():
+        doc = 'Design'
+    parts = []
+    for param, value in zip(params, values):
+        shown = _text_display(_prepare_variation_value(param, value))
+        parts.append(f'{_filename_token(param.name)}-{_filename_token(shown)}')
+    return doc + '__' + '__'.join(parts) + ext
+
+
+def _fit_export_path(folder, filename):
+    full = os.path.join(folder, filename)
+    limit = 240
+    if len(full) <= limit:
+        return full
+    root, ext = os.path.splitext(filename)
+    room = limit - len(os.path.join(folder, '')) - len(ext)
+    if room < 8:
+        room = 8
+    trimmed = root[:room].rstrip(' ._') or 'export'
+    return os.path.join(folder, trimmed + ext)
+
+
+def _recompute_design(design):
+    compute = getattr(design, 'computeAll', None)
+    if callable(compute):
+        compute()
+
+
+def _notify_export_progress(index, total, label):
+    palette = ui.palettes.itemById(PALETTE_ID)
+    if palette:
+        try:
+            palette.sendInfoToHTML('exportProgress', json.dumps({
+                'index': index,
+                'total': total,
+                'label': label,
+            }))
+        except Exception:
+            futil.log(f"exportProgress failed: {traceback.format_exc()}")
+    try:
+        adsk.doEvents()
+    except Exception:
+        futil.log(f"doEvents failed: {traceback.format_exc()}")
+
+
+def _export_root(design, fmt, filepath):
+    root = design.rootComponent
+    export_mgr = design.exportManager
+    if os.path.isfile(filepath):
+        os.remove(filepath)
+    if fmt == 'step':
+        options = export_mgr.createSTEPExportOptions(filepath, root)
+    elif fmt == 'stl':
+        options = export_mgr.createSTLExportOptions(root, filepath)
+        medium = getattr(adsk.fusion.MeshRefinementSettings, 'MeshRefinementMedium', None)
+        if medium is not None:
+            try:
+                options.meshRefinement = medium
+            except Exception:
+                futil.log(f"Could not set STL refinement: {traceback.format_exc()}")
+        try:
+            options.isOneFilePerBody = False
+        except Exception:
+            futil.log(f"Could not set STL one-file option: {traceback.format_exc()}")
+    else:
+        create_3mf = getattr(export_mgr, 'createC3MFExportOptions', None)
+        if create_3mf is None:
+            raise ValueError('This version of Fusion cannot export 3MF.')
+        options = create_3mf(root, filepath)
+    wrote = export_mgr.execute(options)
+    if wrote is False:
+        raise RuntimeError(f'Fusion could not write {os.path.basename(filepath)}.')
+
+
+def _cartesian(lists):
+    combos = [()]
+    for values in lists:
+        combos = [combo + (value,) for combo in combos for value in values]
+    return combos
+
+
+def _downloads_folder():
+    """The current user's Downloads folder, including a relocated Windows folder."""
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ('Data1', wintypes.DWORD),
+                    ('Data2', wintypes.WORD),
+                    ('Data3', wintypes.WORD),
+                    ('Data4', ctypes.c_ubyte * 8),
+                ]
+
+            folder_id = GUID(
+                0x374DE290,
+                0x123F,
+                0x4565,
+                (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
+            )
+            path_ptr = ctypes.c_wchar_p()
+            shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+            shell32.SHGetKnownFolderPath.argtypes = [
+                ctypes.POINTER(GUID),
+                wintypes.DWORD,
+                wintypes.HANDLE,
+                ctypes.POINTER(ctypes.c_wchar_p),
+            ]
+            shell32.SHGetKnownFolderPath.restype = ctypes.c_long
+            if shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(path_ptr)) == 0:
+                folder = path_ptr.value
+                ctypes.WinDLL('ole32').CoTaskMemFree(path_ptr)
+                if folder:
+                    return os.path.normpath(folder)
+        except Exception:
+            futil.log(f"Could not resolve Downloads: {traceback.format_exc()}")
+    return os.path.normpath(os.path.join(os.path.expanduser('~'), 'Downloads'))
+
+
+def browse_export_folder(current=''):
+    dialog = ui.createFolderDialog()
+    dialog.title = 'Folder for variation exports'
+    initial = current.strip() if isinstance(current, str) else ''
+    if not initial or not os.path.isdir(initial):
+        initial = _downloads_folder()
+    if initial and os.path.isdir(initial):
+        try:
+            dialog.initialDirectory = initial
+        except Exception:
+            futil.log(f"Could not set export folder dialog directory: {traceback.format_exc()}")
+    if dialog.showDialog() != adsk.core.DialogResults.DialogOK:
+        return {'cancelled': True, 'path': ''}
+    folder = dialog.folder
+    if not folder:
+        return {'cancelled': True, 'path': ''}
+    return {'cancelled': False, 'path': os.path.normpath(folder)}
+
+
+def export_project_variations(data):
+    design = _get_design()
+    if not design:
+        raise RuntimeError('No active design.')
+    if not isinstance(data, dict):
+        raise ValueError('Choose a format and a folder.')
+    fmt = str(data.get('format') or '').lower()
+    if fmt not in ('step', 'stl', '3mf'):
+        raise ValueError('Choose STEP, STL, or 3MF.')
+    folder = data.get('folder')
+    if not isinstance(folder, str) or not folder.strip():
+        raise ValueError('Choose a folder for the exported files.')
+    folder = os.path.normpath(folder.strip())
+    if not os.path.isdir(folder):
+        raise ValueError('That folder does not exist.')
+
+    participants = _variation_parameters(design)
+    if not participants:
+        raise ValueError('No parameters have variations to export.')
+
+    snapshots = [
+        (param, _read_expression(param), _parameter_unit(param))
+        for param in participants
+    ]
+    combos = _cartesian([_read_variations(param) for param in participants])
+    total = len(combos)
+    doc_name = _active_doc_name()
+    exported = 0
+    files = []
+    errors = []
+
+    try:
+        for index, combo in enumerate(combos, start=1):
+            label = _variation_label(participants, combo)
+            try:
+                for param, value in zip(participants, combo):
+                    expression = _prepare_variation_value(param, value)
+                    _apply_param_expression(design, param, expression, _parameter_unit(param))
+                _recompute_design(design)
+                filename = _variation_filename(doc_name, participants, combo, f'.{fmt}')
+                filepath = _fit_export_path(folder, filename)
+                _export_root(design, fmt, filepath)
+                exported += 1
+                files.append(filepath)
+            except Exception as error:
+                futil.log(f"Variation export failed ({label}): {traceback.format_exc()}")
+                errors.append(f'{label}: {error}')
+            _notify_export_progress(index, total, label)
+    finally:
+        for param, expression, unit in snapshots:
+            try:
+                _apply_param_expression(design, param, expression, unit)
+            except Exception as error:
+                futil.log(f"Could not restore '{param.name}': {traceback.format_exc()}")
+                errors.append(f'Could not restore {param.name}: {error}')
+        try:
+            _recompute_design(design)
+        except Exception:
+            futil.log(f"Recompute after restore failed: {traceback.format_exc()}")
+
+    return {'exported': exported, 'files': files, 'errors': errors}
 
 
 # ===========================================================================

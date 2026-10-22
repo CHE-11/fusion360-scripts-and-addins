@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { IconFileExport } from '@tabler/icons-react';
+
 import { onEvent, request } from '../../connector/fusionBridge';
 import type { ProjectParam } from '../../types/types';
 import { subscribeProjectReload, useGlobalParams } from '../../utils/globalParams';
 import { sanitizeName } from '../../utils/sanitizeName';
+import { variationFileCount } from '../../utils/variations';
+import { ExportVariationsDialog } from '../ExportVariationsDialog/ExportVariationsDialog';
 import { ParamTable, type DraftRow, type TableColumn, type TableRow } from '../ParamTable/ParamTable';
+import { VariationsDialog } from '../VariationsDialog/VariationsDialog';
 import { useToast } from '../common/Toast';
 
 const COLUMNS: TableColumn[] = ['name', 'expression', 'value', 'unit', 'comment'];
@@ -27,6 +32,7 @@ function toRows(params: ProjectParam[]): TableRow[] {
     // A model dimension's unit comes from the sketch or feature, so only the
     // expression, name, and comment can change.
     editableFields: p.isUserParam ? undefined : ['name', 'expression', 'comment'],
+    variationCount: p.isEditable ? (p.variations?.length ?? 0) : 0,
   }));
 }
 
@@ -35,14 +41,24 @@ export function ProjectTab() {
   const { params: globalParams } = useGlobalParams();
   const [params, setParams] = useState<ProjectParam[]>([]);
   const [docName, setDocName] = useState('');
+  const [variationName, setVariationName] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
-  const rows = useMemo(() => {
+  const localParams = useMemo(() => {
     const globalNames = new Set(globalParams.map((param) => sanitizeName(param.name)));
-    const local = params.filter(
-      (param) => !param.isUserParam || !globalNames.has(sanitizeName(param.name))
-    );
-    return toRows(local);
+    return params.filter((param) => !param.isUserParam || !globalNames.has(sanitizeName(param.name)));
   }, [globalParams, params]);
+
+  const rows = useMemo(() => toRows(localParams), [localParams]);
+
+  const exportCount = useMemo(
+    () => variationFileCount(localParams.filter((param) => param.isEditable).map((param) => param.variations?.length ?? 0)),
+    [localParams]
+  );
+
+  const variationParam = variationName
+    ? localParams.find((param) => param.name === variationName && param.isEditable) ?? null
+    : null;
 
   const load = useCallback(async () => {
     try {
@@ -157,12 +173,39 @@ export function ProjectTab() {
         onAdd={onAdd}
         onEdit={onEdit}
         onDelete={onDelete}
+        onVariations={setVariationName}
+        toolbarExtra={
+          <button
+            id="pp_project_exportBtn"
+            className="pp_btn"
+            type="button"
+            disabled={exportCount === 0}
+            title={
+              exportCount === 0
+                ? 'Add variations on a parameter to export them.'
+                : `Export ${exportCount} file${exportCount === 1 ? '' : 's'}`
+            }
+            onClick={() => setExportOpen(true)}
+          >
+            <IconFileExport size={16} />
+            {exportCount > 0 ? `Export variations (${exportCount})` : 'Export variations'}
+          </button>
+        }
         refName={(name) => `{{${sanitizeName(name)}}}`}
         dimensionToggle
         emptyTitle="No parameters in this design"
         emptyMessage="User parameters and model dimensions from the active design show up here. Edit a dimension's expression to change its size."
-
       />
+      {variationParam && (
+        <VariationsDialog
+          param={variationParam}
+          onClose={() => setVariationName(null)}
+          onSaved={() => void load()}
+        />
+      )}
+      {exportOpen && (
+        <ExportVariationsDialog fileCount={exportCount} onClose={() => setExportOpen(false)} />
+      )}
     </div>
   );
 }

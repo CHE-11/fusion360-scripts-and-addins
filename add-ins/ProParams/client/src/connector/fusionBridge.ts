@@ -18,6 +18,8 @@
 
 import type {
   BrowseParamsFileResult,
+  ExportFormat,
+  ExportVariationsResult,
   FeatureSelection,
   GlobalParam,
   ParamsLocation,
@@ -25,6 +27,7 @@ import type {
   PushResult,
 } from '../types/types';
 import { markSynced } from '../utils/lastSync';
+import { cartesianVariations, prepareVariationValue, textDisplay, variationFileName } from '../utils/variations';
 
 // ---------------------------------------------------------------------------
 // Response envelope
@@ -222,10 +225,11 @@ let mockGlobal: GlobalParam[] = [
 ];
 
 const mockProject: ProjectParam[] = [
-  { name: 'length', expression: '120 mm', value: '120.0', unit: 'mm', comment: 'Overall length', isUserParam: true, isDeletable: true, isEditable: true },
-  { name: 'width', expression: '80 mm', value: '80.0', unit: 'mm', comment: '', isUserParam: true, isDeletable: true, isEditable: true },
-  { name: 'd12', expression: '5 mm', value: '5.0', unit: 'mm', comment: 'Fillet radius', isUserParam: false, isDeletable: false, isEditable: true },
-  { name: 'd5', expression: '42 mm', value: '42.0', unit: 'mm', comment: 'Driven measurement', isUserParam: false, isDeletable: false, isEditable: false },
+  { name: 'length', expression: '120 mm', value: '120.0', unit: 'mm', comment: 'Overall length', isUserParam: true, isDeletable: true, isEditable: true, variations: [] },
+  { name: 'width', expression: '80 mm', value: '80.0', unit: 'mm', comment: '', isUserParam: true, isDeletable: true, isEditable: true, variations: [] },
+  { name: 'label', expression: '"Hello"', value: 'Hello', unit: 'Text', comment: 'Engraved text', isUserParam: true, isDeletable: true, isEditable: true, variations: ['"Hello"', '"World"'] },
+  { name: 'd12', expression: '5 mm', value: '5.0', unit: 'mm', comment: 'Fillet radius', isUserParam: false, isDeletable: false, isEditable: true, variations: [] },
+  { name: 'd5', expression: '42 mm', value: '42.0', unit: 'mm', comment: 'Driven measurement', isUserParam: false, isDeletable: false, isEditable: false, variations: [] },
 ];
 
 let mockFeature: FeatureSelection = {
@@ -287,6 +291,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
             isUserParam: true,
             isDeletable: true,
             isEditable: true,
+            variations: [],
           });
           created += 1;
         }
@@ -314,6 +319,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
         isUserParam: true,
         isDeletable: true,
         isEditable: true,
+        variations: [],
       };
       mockProject.push(p);
       return p as unknown as T;
@@ -327,11 +333,14 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
       }
       const idx = mockProject.findIndex((p) => p.name === body.originalName);
       if (idx >= 0) {
+        const expression = String(body.expression);
+        const unit = String(body.unit ?? mockProject[idx].unit ?? '');
         mockProject[idx] = {
           ...mockProject[idx],
           name: String(body.name),
-          expression: String(body.expression),
-          unit: String(body.unit ?? mockProject[idx].unit ?? ''),
+          expression,
+          value: unit === 'Text' ? textDisplay(expression) : mockProject[idx].value,
+          unit,
           comment: String(body.comment ?? ''),
         };
         return mockProject[idx] as unknown as T;
@@ -342,6 +351,61 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
       const i = mockProject.findIndex((p) => p.name === body.name);
       if (i >= 0) mockProject.splice(i, 1);
       return undefined as unknown as T;
+    }
+    case 'project:setVariations': {
+      const idx = mockProject.findIndex((param) => param.name === body.name);
+      if (idx < 0) throw new FusionError('Parameter not found');
+      if (!mockProject[idx].isEditable) {
+        throw new FusionError(`"${String(body.name)}" is a driven dimension and cannot store variations.`);
+      }
+      const unit = mockProject[idx].unit ?? '';
+      const incoming = Array.isArray(body.values) ? body.values : [];
+      const values = incoming
+        .map((value) => prepareVariationValue(String(value), unit))
+        .filter((value) => value.length > 0);
+      mockProject[idx] = { ...mockProject[idx], variations: values };
+      return { ...mockProject[idx] } as unknown as T;
+    }
+    case 'project:defaultExportFolder':
+      return { path: 'C:\\Users\\dev\\Downloads' } as unknown as T;
+    case 'project:browseExportFolder':
+      return { cancelled: false, path: 'C:\\Users\\dev\\ProParams\\exports' } as unknown as T;
+    case 'project:exportVariations': {
+      const format = String(body.format ?? '') as ExportFormat;
+      if (format !== 'step' && format !== 'stl' && format !== '3mf') {
+        throw new FusionError('Choose STEP, STL, or 3MF.');
+      }
+      const folder = typeof body.folder === 'string' ? body.folder.trim() : '';
+      if (!folder) throw new FusionError('Choose a folder for the exported files.');
+      const globalNames = new Set(mockGlobal.map((param) => param.name));
+      const participating = mockProject.filter(
+        (param) =>
+          param.isEditable &&
+          (param.variations?.length ?? 0) > 0 &&
+          !(param.isUserParam && globalNames.has(param.name))
+      );
+      const combos = cartesianVariations(
+        participating.map((param) => ({ name: param.name, values: param.variations ?? [] }))
+      );
+      if (combos.length === 0) throw new FusionError('No parameters have variations to export.');
+      const files: string[] = [];
+      const errors: string[] = [];
+      for (let index = 0; index < combos.length; index += 1) {
+        const combo = combos[index];
+        const fileName = variationFileName('Design', combo, format);
+        files.push(`${folder}\\${fileName}`);
+        dispatchEvent(
+          'exportProgress',
+          JSON.stringify({
+            index: index + 1,
+            total: combos.length,
+            label: combo.map((part) => `${part.name}=${textDisplay(part.value)}`).join(', '),
+          })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      const result: ExportVariationsResult = { exported: files.length, files, errors };
+      return result as unknown as T;
     }
 
     case 'feature:readSelection':

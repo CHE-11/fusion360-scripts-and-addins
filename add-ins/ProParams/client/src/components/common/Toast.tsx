@@ -12,7 +12,7 @@ import {
 
 import { copyToClipboard } from '../../utils/clipboard';
 
-type ToastType = 'info' | 'success' | 'error';
+type ToastType = 'info' | 'success' | 'error' | 'warning';
 
 type Toast = {
   id: number;
@@ -52,7 +52,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (message: string, type: ToastType = 'info') => {
       const id = nextId.current++;
       setToasts((cur) => [...cur, { id, type, message }]);
-      window.setTimeout(() => dismiss(id), type === 'error' ? 6000 : 3000);
+      window.setTimeout(() => dismiss(id), type === 'error' || type === 'warning' ? 6000 : 3000);
     },
     [dismiss]
   );
@@ -68,7 +68,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={t.id}
             id={`pp_toast_${t.id}`}
             className={`pp_toast pp_toast_${t.type}`}
-            onClick={() => dismiss(t.id)}
+            onClick={(event) => {
+              if (event.target instanceof Element && event.target.closest('.pp_toastCopy')) return;
+              dismiss(t.id);
+            }}
             role="status"
           >
             <span id={`pp_toastMessage_${t.id}`} className="pp_toastMessage">
@@ -80,6 +83,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               className="pp_toastCopy"
               title={copiedId === t.id ? 'Copied' : 'Copy'}
               aria-label="Copy message"
+              onPointerDown={(event) => {
+                // A focused copy button blurs the parameter editor and that blur saves the row.
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
               onClick={(event) => void copyMessage(event, t.id, t.message)}
             >
               {copiedId === t.id ? <IconCheck size={13} /> : <IconCopy size={13} />}

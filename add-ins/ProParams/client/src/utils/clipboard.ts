@@ -35,6 +35,14 @@ async function copyWithHost(text: string): Promise<boolean> {
 }
 
 function copyWithExecCommand(text: string): boolean {
+  const previous = document.activeElement;
+  const selection =
+    previous instanceof HTMLInputElement || previous instanceof HTMLTextAreaElement
+      ? { start: previous.selectionStart, end: previous.selectionEnd }
+      : null;
+  // ParamTable watches focusout. This marks the temporary focus move so the
+  // open editor does not save or clear while the copy is in progress.
+  document.body.dataset.ppCopying = 'true';
   const area = document.createElement('textarea');
   area.id = 'pp_clipboard_sink';
   area.value = text;
@@ -64,6 +72,18 @@ function copyWithExecCommand(text: string): boolean {
     ok = false;
   } finally {
     document.body.removeChild(area);
+    if (previous instanceof HTMLElement && previous.isConnected) {
+      previous.focus({ preventScroll: true });
+      if (
+        selection &&
+        selection.start !== null &&
+        selection.end !== null &&
+        (previous instanceof HTMLInputElement || previous instanceof HTMLTextAreaElement)
+      ) {
+        previous.setSelectionRange(selection.start, selection.end);
+      }
+    }
+    delete document.body.dataset.ppCopying;
   }
   return ok;
 }

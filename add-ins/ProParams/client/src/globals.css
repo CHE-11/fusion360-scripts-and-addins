@@ -386,6 +386,18 @@ body.pp_resizing * {
   color: var(--pp-ok);
 }
 
+.pp_iconBtnActive {
+  color: #fff;
+  background: var(--pp-accent);
+  border-color: var(--pp-accent);
+}
+
+.pp_iconBtnActive:hover:not(:disabled) {
+  color: #fff;
+  background: var(--pp-accent-hover);
+  border-color: var(--pp-accent-hover);
+}
+
 /* -------------------------------------------------------------- inputs */
 .pp_input {
   width: 100%;
@@ -618,6 +630,8 @@ body.pp_resizing * {
 .pp_toolbarActions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -743,6 +757,32 @@ body.pp_resizing * {
   text-overflow: clip;
 }
 
+.pp_tableWrapVariations .pp_actionsCol,
+.pp_tableWrapVariations .pp_table td:has(.pp_actions) {
+  width: 132px;
+}
+
+.pp_table .pp_variationBtn {
+  position: relative;
+  overflow: visible;
+}
+
+.pp_variationCount {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 999px;
+  background: var(--pp-accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+
 .pp_actions {
   display: flex;
   gap: 10px;
@@ -860,6 +900,7 @@ body.pp_resizing * {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   cursor: pointer;
   font-size: 13px;
+  user-select: none;
   animation: pp_toastIn 0.14s ease-out;
 }
 
@@ -900,6 +941,10 @@ body.pp_resizing * {
 
 .pp_toast_info {
   border-left: 3px solid var(--pp-accent);
+}
+
+.pp_toast_warning {
+  border-left: 3px solid #d29922;
 }
 
 /* ------------------------------------------------------------- dialogs */
@@ -1008,6 +1053,54 @@ body.pp_resizing * {
   color: var(--pp-danger);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.pp_select {
+  color-scheme: dark;
+}
+
+.pp_variationList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.pp_variationRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pp_variationRow .pp_input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pp_exportResult {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pp_exportFiles,
+.pp_exportErrors {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pp_exportFiles {
+  color: var(--pp-text-dim);
+}
+
+.pp_exportErrors {
+  color: var(--pp-danger);
 }
 
 @keyframes pp_toastIn {

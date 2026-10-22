@@ -34,6 +34,8 @@ export type ProjectParam = {
   isUserParam: boolean;
   isDeletable: boolean;
   isEditable: boolean;
+  /** Alternate expressions exported as a cartesian product. Empty when unset. */
+  variations?: string[];
 };
 
 /**
@@ -103,6 +105,21 @@ export type UpdateParamPayload = {
 
 export type DeleteParamPayload = {
   name: string;
+};
+
+export type ExportFormat = 'step' | 'stl' | '3mf';
+
+/** Progress pushed while `project:exportVariations` is still running. */
+export type ExportProgress = {
+  index: number;
+  total: number;
+  label: string;
+};
+
+export type ExportVariationsResult = {
+  exported: number;
+  files: string[];
+  errors: string[];
 };
 
 // ---------------------------------------------------------------------------

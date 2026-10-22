@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   IconCheck,
@@ -11,6 +11,7 @@ import {
   IconSortAscending,
   IconSortDescending,
   IconTrash,
+  IconVersions,
   IconX,
 } from '@tabler/icons-react';
 
@@ -34,6 +35,8 @@ export type TableRow = {
   deletable: boolean;
   /** Fields this row can change. Falls back to the table-level list. */
   editableFields?: DraftField[];
+  /** Saved variation rows. Shown on the variations button when the table offers that action. */
+  variationCount?: number;
 };
 
 export type DraftRow = {
@@ -141,6 +144,10 @@ type Props = {
   onDelete?: (name: string) => Promise<void> | void;
   refName: (name: string) => string;
   busy?: boolean;
+  /** Project table: edit the variation list for one parameter. */
+  onVariations?: (name: string) => void;
+  /** Extra control in the toolbar, placed before Add. */
+  toolbarExtra?: ReactNode;
   /** Project table: toggle created parameters against every model dimension. */
   dimensionToggle?: boolean;
   emptyTitle?: string;
@@ -159,6 +166,8 @@ export function ParamTable({
   onDelete,
   refName,
   busy,
+  onVariations,
+  toolbarExtra,
   dimensionToggle = false,
   emptyTitle = 'No parameters',
   emptyMessage,
@@ -410,11 +419,24 @@ export function ParamTable({
       if (editRowRef.current?.contains(target)) return true;
       return !!unitMenu()?.contains(target);
     };
+    // Toast copy and the clipboard sink take focus only for the copy itself.
+    // Leaving the field for those must not save or clear the row.
+    const isCopyTarget = (target: Node | null) => {
+      if (!(target instanceof Element)) return false;
+      return !!target.closest('#pp_toastContainer, #pp_clipboard_sink');
+    };
 
     let pointerInside = false;
 
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
+      if (target instanceof Node && isCopyTarget(target)) {
+        pointerInside = true;
+        window.setTimeout(() => {
+          pointerInside = false;
+        }, 0);
+        return;
+      }
       const inside = target instanceof Node && inEditor(target);
       pointerInside = inside;
       if (inside) {
@@ -454,8 +476,9 @@ export function ParamTable({
       const fromPointerInside = pointerInside;
       pointerInside = false;
       if (fromPointerInside) return;
+      if (document.body.dataset.ppCopying === 'true') return;
       const next = event.relatedTarget;
-      if (next instanceof Node && inEditor(next)) return;
+      if (next instanceof Node && (inEditor(next) || isCopyTarget(next))) return;
       void commit();
     };
 
@@ -591,7 +614,10 @@ export function ParamTable({
   };
 
   return (
-    <div id={`${idPrefix}_tableWrap`} className="pp_tableWrap">
+    <div
+      id={`${idPrefix}_tableWrap`}
+      className={onVariations ? 'pp_tableWrap pp_tableWrapVariations' : 'pp_tableWrap'}
+    >
       <div id={`${idPrefix}_toolbar`} className="pp_tableToolbar">
         <div id={`${idPrefix}_toolbarLead`} className="pp_toolbarLead">
           <div className="pp_search">
@@ -635,7 +661,8 @@ export function ParamTable({
             </button>
           )}
         </div>
-        <div className="pp_toolbarActions">
+        <div id={`${idPrefix}_toolbarActions`} className="pp_toolbarActions">
+          {toolbarExtra}
           {canAdd && (
             <button
               id={`${idPrefix}_addBtn`}
@@ -719,6 +746,9 @@ export function ParamTable({
                     <button id={`${idPrefix}_new_cancel`} className="pp_iconBtn" title="Cancel" onClick={cancelEdit}>
                       <IconX size={16} />
                     </button>
+                    {onVariations && (
+                      <span id={`${idPrefix}_new_variationsSpacer`} className="pp_actionSpacer" aria-hidden="true" />
+                    )}
                     {onEdit && onDelete && (
                       <span id={`${idPrefix}_new_deleteSpacer`} className="pp_actionSpacer" aria-hidden="true" />
                     )}
@@ -787,6 +817,13 @@ export function ParamTable({
                           >
                             <IconX size={16} />
                           </button>
+                          {onVariations && (
+                            <span
+                              id={`${idPrefix}_r${rowIndex}_variationsSpacer`}
+                              className="pp_actionSpacer"
+                              aria-hidden="true"
+                            />
+                          )}
                           {onEdit && onDelete && (
                             <span
                               id={`${idPrefix}_r${rowIndex}_deleteSpacer`}
@@ -811,6 +848,42 @@ export function ParamTable({
                             onEdit && (
                               <span
                                 id={`${idPrefix}_r${rowIndex}_editSpacer`}
+                                className="pp_actionSpacer"
+                                aria-hidden="true"
+                              />
+                            )
+                          )}
+                          {onVariations && row.editable ? (
+                            <button
+                              id={`${idPrefix}_r${rowIndex}_variations`}
+                              className="pp_iconBtn pp_variationBtn"
+                              title={
+                                (row.variationCount ?? 0) > 0
+                                  ? `${row.variationCount} variations`
+                                  : 'Variations'
+                              }
+                              aria-label={
+                                (row.variationCount ?? 0) > 0
+                                  ? `${row.variationCount} variations`
+                                  : 'Variations'
+                              }
+                              onClick={() => onVariations(row.name)}
+                              disabled={!!editingKey}
+                            >
+                              <IconVersions size={16} />
+                              {(row.variationCount ?? 0) > 0 && (
+                                <span
+                                  id={`${idPrefix}_r${rowIndex}_variationCount`}
+                                  className="pp_variationCount"
+                                >
+                                  {row.variationCount}
+                                </span>
+                              )}
+                            </button>
+                          ) : (
+                            onVariations && (
+                              <span
+                                id={`${idPrefix}_r${rowIndex}_variationsSpacer`}
                                 className="pp_actionSpacer"
                                 aria-hidden="true"
                               />
