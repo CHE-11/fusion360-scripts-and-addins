@@ -38,6 +38,7 @@ export function Explorer() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
   const [projectMatches, setProjectMatches] = useState<ExplorerNode[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchTruncated, setSearchTruncated] = useState(false);
@@ -50,6 +51,7 @@ export function Explorer() {
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [detailNonce, setDetailNonce] = useState(0);
   const [searchEpoch, setSearchEpoch] = useState(0);
+  const [inserting, setInserting] = useState(false);
 
   const loadSeq = useRef(0);
   const searchRef = useRef('');
@@ -58,6 +60,7 @@ export function Explorer() {
   const rowsRef = useRef<ExplorerNode[]>([]);
   const selectedRef = useRef('');
   const queryRef = useRef('');
+  const activeQueryRef = useRef('');
   const skipRenameCommit = useRef(false);
   const refCache = useRef(new Map<string, ReferencesPayload>());
   const openNodeRef = useRef<(node: ExplorerNode) => void>(() => {});
@@ -66,6 +69,7 @@ export function Explorer() {
   crumbsRef.current = crumbs;
   selectedRef.current = selectedId;
   queryRef.current = query;
+  activeQueryRef.current = activeQuery;
 
   const applyListing = useCallback((listing: Listing) => {
     setLocation(listing.location);
@@ -82,7 +86,10 @@ export function Explorer() {
       const seq = ++loadSeq.current;
       setLoading(true);
       setError('');
-      if (!options?.keepQuery) setQuery('');
+      if (!options?.keepQuery) {
+        setQuery('');
+        setActiveQuery('');
+      }
       try {
         const listing = await request<Listing>('folder:list', target);
         if (seq !== loadSeq.current) return;
@@ -167,26 +174,22 @@ export function Explorer() {
     }
     setProjectMatches([]);
     setSearchTruncated(false);
-    const needle = query.trim();
+    const needle = activeQuery.trim();
     if (!needle || !projectId) {
       setSearching(false);
       return;
     }
     setSearching(true);
-    const handle = window.setTimeout(() => {
-      const searchId = newSearchId();
-      searchRef.current = searchId;
-      setSearching(true);
-      void request('search:start', { searchId, query: needle, projectId }).catch((err) => {
-        if (searchRef.current !== searchId) return;
-        setSearching(false);
-        showToast(errorMessage(err, 'Search failed.'), 'error');
-      });
-    }, 250);
-    return () => window.clearTimeout(handle);
-  }, [projectId, query, searchEpoch, showToast]);
+    const searchId = newSearchId();
+    searchRef.current = searchId;
+    void request('search:start', { searchId, query: needle, projectId }).catch((err) => {
+      if (searchRef.current !== searchId) return;
+      setSearching(false);
+      showToast(errorMessage(err, 'Search failed.'), 'error');
+    });
+  }, [projectId, activeQuery, searchEpoch, showToast]);
 
-  const needle = query.trim().toLowerCase();
+  const needle = activeQuery.trim().toLowerCase();
   const localRows = needle ? children.filter((node) => node.name.toLowerCase().includes(needle)) : children;
   const childIds = useMemo(() => new Set(children.map((node) => node.id)), [children]);
   const otherRows = needle
@@ -294,9 +297,10 @@ export function Explorer() {
           setSelectedId('');
           return;
         }
-        if (queryRef.current) {
+        if (queryRef.current || activeQueryRef.current) {
           event.preventDefault();
           setQuery('');
+          setActiveQuery('');
         }
         return;
       }
@@ -418,12 +422,34 @@ export function Explorer() {
     }
   }
 
+  async function insertNode(node: ExplorerNode) {
+    if (inserting) return;
+    if (node.extension !== 'f3d') {
+      showToast('Only Fusion designs can be inserted.', 'error');
+      return;
+    }
+    if (node.id === activeFileId) {
+      showToast('A design cannot be inserted into itself.', 'error');
+      return;
+    }
+    setInserting(true);
+    try {
+      const result = await request<{ inserted: boolean; name: string }>('file:insert', { id: node.id });
+      showToast(`Inserted ${result.name || node.name}`, 'success');
+    } catch (err) {
+      showToast(errorMessage(err, 'Fusion could not insert that design.'), 'error');
+    } finally {
+      setInserting(false);
+    }
+  }
+
   async function revealActive() {
     try {
       const result = await request<ActiveFileLocation>('nav:activeFile');
       loadSeq.current += 1;
       applyListing(result.listing);
       setQuery('');
+      setActiveQuery('');
       setSelectedId(result.fileId);
       setActiveFileId(result.fileId);
       setRenameId('');
@@ -449,7 +475,7 @@ export function Explorer() {
     emptyMessage = 'Looking through the rest of the project.';
   } else if (needle) {
     emptyTitle = 'No matches';
-    emptyMessage = `Nothing in this project is named “${query.trim()}”.`;
+    emptyMessage = `Nothing in this project is named “${activeQuery.trim()}”.`;
   } else if (location?.kind === 'hub') {
     emptyTitle = 'No projects';
     emptyMessage = 'This hub does not have any projects yet.';
@@ -475,6 +501,16 @@ export function Explorer() {
           if (hub) void load(hub);
         }}
         onQuery={setQuery}
+        onSearch={() => {
+          const next = query.trim();
+          setQuery(next);
+          setActiveQuery(next);
+          setSearchEpoch((value) => value + 1);
+        }}
+        onClear={() => {
+          setQuery('');
+          setActiveQuery('');
+        }}
         onCreate={() => {
           setRenameId('');
           setCreating(true);
@@ -525,6 +561,8 @@ export function Explorer() {
             setRenameId('');
           }}
           onWhereUsed={(node) => setSelectedId(node.id)}
+          onInsert={(node) => void insertNode(node)}
+          inserting={inserting}
           onMove={(node) => {
             setSelectedId(node.id);
             setMoveNode(node);
@@ -552,6 +590,10 @@ export function Explorer() {
           message={detail && detail.fileId === detailFile.id ? detail.message : ''}
           onClose={() => setSelectedId('')}
           onOpen={openNode}
+          onInsert={(node) => void insertNode(node)}
+          canInsert={detailFile.extension === 'f3d' && detailFile.id !== activeFileId}
+          inserting={inserting}
+          activeFileId={activeFileId}
           onReveal={(node) => {
             if (!node.parentId) {
               showToast('That file does not have a folder to show.', 'error');

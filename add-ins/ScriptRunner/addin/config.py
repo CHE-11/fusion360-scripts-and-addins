@@ -4,7 +4,7 @@
 DEBUG = True
 
 ADDIN_NAME = 'ScriptRunner'
-COMPANY_NAME = 'ConnorE'
+COMPANY_NAME = 'CHE'
 
 WORKSPACE_ID = 'FusionSolidEnvironment'
 PANEL_ID = 'SolidScriptsAddinsPanel'

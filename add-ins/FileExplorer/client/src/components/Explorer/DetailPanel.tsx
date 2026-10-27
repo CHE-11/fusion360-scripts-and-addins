@@ -9,11 +9,28 @@ type Props = {
   message: string;
   onClose: () => void;
   onOpen: (node: ExplorerNode) => void;
+  onInsert: (node: ExplorerNode) => void;
   onReveal: (node: ExplorerNode) => void;
   onRetry: () => void;
+  canInsert: boolean;
+  inserting: boolean;
+  activeFileId: string;
 };
 
-export function DetailPanel({ file, status, data, message, onClose, onOpen, onReveal, onRetry }: Props) {
+export function DetailPanel({
+  file,
+  status,
+  data,
+  message,
+  onClose,
+  onOpen,
+  onInsert,
+  onReveal,
+  onRetry,
+  canInsert,
+  inserting,
+  activeFileId,
+}: Props) {
   const meta = [
     file.extension ? file.extension.toUpperCase() : 'File',
     file.version != null ? `v${file.version}` : '',
@@ -30,6 +47,17 @@ export function DetailPanel({ file, status, data, message, onClose, onOpen, onRe
           <h2 id="fx-detail-name">{file.name}</h2>
           <p id="fx-detail-meta">{meta}</p>
         </div>
+        {canInsert && (
+          <button
+            id="fx-detail-insert"
+            type="button"
+            className="fx-textButton"
+            onClick={() => onInsert(file)}
+            disabled={inserting}
+          >
+            Insert
+          </button>
+        )}
         <button id="fx-detail-close" type="button" className="fx-textButton" onClick={onClose}>
           Close
         </button>
@@ -54,8 +82,28 @@ export function DetailPanel({ file, status, data, message, onClose, onOpen, onRe
               {data.warning}
             </p>
           )}
-          <RefList id="used-in" title="Used in" empty="Nothing references this file." rows={data.parents} onOpen={onOpen} onReveal={onReveal} />
-          <RefList id="uses" title="Uses" empty="This file does not reference other files." rows={data.children} onOpen={onOpen} onReveal={onReveal} />
+          <RefList
+            id="used-in"
+            title="Used in"
+            empty="Nothing references this file."
+            rows={data.parents}
+            onOpen={onOpen}
+            onInsert={onInsert}
+            inserting={inserting}
+            activeFileId={activeFileId}
+            onReveal={onReveal}
+          />
+          <RefList
+            id="uses"
+            title="Uses"
+            empty="This file does not reference other files."
+            rows={data.children}
+            onOpen={onOpen}
+            onInsert={onInsert}
+            inserting={inserting}
+            activeFileId={activeFileId}
+            onReveal={onReveal}
+          />
         </div>
       )}
     </aside>
@@ -68,6 +116,9 @@ function RefList({
   empty,
   rows,
   onOpen,
+  onInsert,
+  inserting,
+  activeFileId,
   onReveal,
 }: {
   id: string;
@@ -75,6 +126,9 @@ function RefList({
   empty: string;
   rows: ExplorerNode[];
   onOpen: (node: ExplorerNode) => void;
+  onInsert: (node: ExplorerNode) => void;
+  inserting: boolean;
+  activeFileId: string;
   onReveal: (node: ExplorerNode) => void;
 }) {
   return (
@@ -107,6 +161,17 @@ function RefList({
                   {node.extension && <span className="fx-ext">.{node.extension}</span>}
                 </span>
               </button>
+              {node.extension === 'f3d' && node.id !== activeFileId && (
+                <button
+                  id={`fx-ref-insert-${id}-${node.id}`}
+                  type="button"
+                  className="fx-textButton"
+                  onClick={() => onInsert(node)}
+                  disabled={inserting}
+                >
+                  Insert
+                </button>
+              )}
               <button
                 id={`fx-ref-open-${id}-${node.id}`}
                 type="button"

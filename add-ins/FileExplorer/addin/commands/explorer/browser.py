@@ -10,12 +10,13 @@ import time
 import traceback
 
 import adsk.core
+import adsk.fusion
 
 from ...lib import fusionAddInUtils as futil
 
 app = adsk.core.Application.get()
 
-SEARCH_EVENT_ID = 'ConnorE_FileExplorer_searchTick'
+SEARCH_EVENT_ID = 'CHE_FileExplorer_searchTick'
 SEARCH_LIMIT = 3000
 BATCH_FOLDERS = 10
 _INVALID_NAME = set('<>:"/\\|?*')
@@ -113,6 +114,51 @@ def open_file(file_id):
     data_file = _require(file_id, 'file')
     app.documents.open(data_file, True)
     return {'opened': True, 'activated': False}
+
+
+def insert_file(file_id):
+    """Insert a Fusion design into the active component as a linked occurrence."""
+    if not file_id:
+        raise ValueError('Choose a design to insert.')
+    data_file = _require(file_id, 'file')
+    extension = ''
+    try:
+        extension = (data_file.fileExtension or '').lstrip('.').lower()
+    except Exception:
+        extension = ''
+    if extension != 'f3d':
+        raise ValueError('Only Fusion designs can be inserted into the open design.')
+
+    design = adsk.fusion.Design.cast(app.activeProduct)
+    if not design:
+        raise ValueError('Open a Fusion design before inserting a file.')
+    target = _active_file()
+    if not target:
+        raise ValueError('Save the open design before inserting a file.')
+    if _safe(lambda: target.id) == file_id:
+        raise ValueError('A design cannot be inserted into itself.')
+
+    source_project = _safe(lambda: data_file.parentProject)
+    target_project = _safe(lambda: target.parentProject)
+    source_project_id = _safe(lambda: source_project.id) if source_project else ''
+    target_project_id = _safe(lambda: target_project.id) if target_project else ''
+    if source_project_id and target_project_id and source_project_id != target_project_id:
+        raise ValueError('Fusion can only link a design from the same project as the open design.')
+
+    component = _safe(lambda: design.activeComponent) or design.rootComponent
+    transform = adsk.core.Matrix3D.create()
+    try:
+        row = _configuration_row(data_file)
+        if row:
+            occurrence = component.occurrences.addFromConfiguration(row, transform)
+        else:
+            occurrence = component.occurrences.addByInsert(data_file, transform, True)
+    except Exception as exc:
+        raise ValueError(_short_error(exc, 'Fusion could not insert that design.')) from exc
+    if not occurrence:
+        raise ValueError('Fusion could not insert that design.')
+    name = _safe(lambda: occurrence.name) or _safe(lambda: data_file.name) or 'design'
+    return {'inserted': True, 'name': name}
 
 
 def rename_item(data):
@@ -578,6 +624,22 @@ def _active_file_id():
     if not data_file:
         return ''
     return _safe(lambda: data_file.id) or ''
+
+
+def _configuration_row(data_file):
+    """First real configuration row, when this file is a configured design."""
+    if not _safe_bool(lambda: data_file.isConfiguredDesign):
+        return None
+    table = _safe(lambda: data_file.configurationTable)
+    rows = _safe(lambda: table.rows) if table else None
+    count = _safe(lambda: rows.count) if rows else 0
+    if not count:
+        return None
+    for index in range(count):
+        row = _safe(lambda index=index: rows.item(index))
+        if row and not _safe_bool(lambda row=row: row.isTestRow):
+            return row
+    return None
 
 
 def _refuse_if_open(file_id):

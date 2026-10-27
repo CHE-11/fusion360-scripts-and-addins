@@ -15,8 +15,10 @@ type Props = {
   onRenameCommit: (node: ExplorerNode, name: string) => void;
   onRenameCancel: () => void;
   onWhereUsed: (node: ExplorerNode) => void;
+  onInsert: (node: ExplorerNode) => void;
   onMove: (node: ExplorerNode) => void;
   onDelete: (node: ExplorerNode) => void;
+  inserting: boolean;
 };
 
 export function FileRow({
@@ -30,8 +32,10 @@ export function FileRow({
   onRenameCommit,
   onRenameCancel,
   onWhereUsed,
+  onInsert,
   onMove,
   onDelete,
+  inserting,
 }: Props) {
   const canEdit = node.kind === 'file' || node.kind === 'folder';
   return (
@@ -80,6 +84,19 @@ export function FileRow({
       )}
       {canEdit && !renaming && (
         <div id={`fx-actions-${node.id}`} className="fx-actions">
+          {node.kind === 'file' && node.extension === 'f3d' && !active && (
+            <button
+              id={`fx-insert-${node.id}`}
+              type="button"
+              className="fx-action"
+              title="Insert into the open design"
+              aria-label={`Insert ${node.name} into the open design`}
+              onClick={() => onInsert(node)}
+              disabled={inserting}
+            >
+              <InsertIcon />
+            </button>
+          )}
           {node.kind === 'file' && (
             <button
               id={`fx-where-${node.id}`}
@@ -179,6 +196,16 @@ function RenameField({
         Cancel
       </button>
     </form>
+  );
+}
+
+function InsertIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 3.4v4.2" />
+      <path d="M8.1 5.6 10 7.6l1.9-2" />
+      <path d="M5.2 8.4h9.6v7.4H5.2z" />
+    </svg>
   );
 }
 

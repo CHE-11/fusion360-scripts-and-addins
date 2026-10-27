@@ -8,7 +8,7 @@ DEBUG = True
 REACT_DEV = False
 
 ADDIN_NAME = 'CONstrainer'
-COMPANY_NAME = 'ConnorE'
+COMPANY_NAME = 'CHE'
 
 PALETTE_ID = f'{COMPANY_NAME}_{ADDIN_NAME}_palette'
 DEV_PALETTE_URL = 'http://localhost:5173/'

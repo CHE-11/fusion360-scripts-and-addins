@@ -508,6 +508,20 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
     mockFail('Choose a hub, project, or folder.');
   }
 
+  if (action === 'file:insert') {
+    const found = findFile(String(data.id || ''));
+    if (!found) mockFail('Choose a design to insert.');
+    if (found.file.extension !== 'f3d') mockFail('Only Fusion designs can be inserted into the open design.');
+    const target = findFile(activeFileId);
+    if (!target) mockFail('Save the open design before inserting a file.');
+    if (target.file.extension !== 'f3d') mockFail('Open a Fusion design before inserting a file.');
+    if (found.file.id === target.file.id) mockFail('A design cannot be inserted into itself.');
+    if (found.project.id !== target.project.id) {
+      mockFail('Fusion can only link a design from the same project as the open design.');
+    }
+    return delay({ inserted: true, name: `${found.file.name}:1` } as T, 40);
+  }
+
   if (action === 'file:open') {
     const found = findFile(String(data.id || ''));
     if (!found) mockFail('Choose a file to open.');

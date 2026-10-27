@@ -185,6 +185,7 @@ button:disabled {
 .fx-iconButton:hover,
 .fx-primaryButton:hover,
 .fx-crumb:hover,
+.fx-searchSubmit:hover,
 .fx-searchClear:hover {
   background: var(--fx-hover);
   border-color: var(--fx-line-strong);
@@ -261,6 +262,7 @@ button:disabled {
   color: var(--fx-text-faint);
 }
 
+.fx-searchSubmit,
 .fx-searchClear {
   border: 0;
   background: transparent;
@@ -268,6 +270,13 @@ button:disabled {
   border-radius: 999px;
   height: 22px;
   padding: 0 8px;
+  flex: 0 0 auto;
+}
+
+.fx-searchSubmit {
+  background: var(--fx-bg-raised);
+  border: 1px solid var(--fx-line);
+  color: var(--fx-text);
 }
 
 #fx-crumbs {
@@ -424,6 +433,10 @@ button:disabled {
   color: var(--fx-text-dim);
   display: grid;
   place-items: center;
+}
+
+.fx-action:disabled {
+  opacity: 0.45;
 }
 
 .fx-action:hover {

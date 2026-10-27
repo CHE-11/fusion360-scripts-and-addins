@@ -4,7 +4,7 @@ import os
 DEBUG = False
 
 ADDIN_NAME = 'RestartAddIns'
-COMPANY_NAME = 'ConnorE'
+COMPANY_NAME = 'CHE'
 
 # Must match the id in RestartAddIns.manifest.
 ADDIN_ID = 'c4e8a1d7-6b25-4f90-9c3e-2d7a5b8e1f04'

@@ -1,10 +1,10 @@
 # Script Runner
 
-Script Runner is a Fusion add-in that adds a **Scripts** dropdown for the scripts you have saved. Open the menu and pick a script to run it.
+Script Runner is a Fusion add-in that adds a **Scripts** button for the scripts you have saved. Click it, choose a script, and click **Run**.
 
-The menu lists scripts from **My Scripts**: the ones in your scripts folder, and any script you linked with the **+** button in **Scripts and Add-Ins**. Sample scripts that ship with Fusion are left out, and add-ins are left out. Choose **Refresh** after you create or link a script.
+The list shows scripts from **My Scripts**: the ones in your scripts folder, and any script you linked with the **+** button in **Scripts and Add-Ins**. Sample scripts that ship with Fusion are left out, and add-ins are left out. Choose **Refresh** in the dialog after you create or link a script.
 
-The dropdown is on the Design workspace **Solid** tab, and on **Utilities → ADD-INS** next to **Scripts and Add-Ins**.
+The button is pinned on the Design workspace **Solid** tab in the **CHE** group, and on **Utilities → ADD-INS** next to **Scripts and Add-Ins**.
 
 ## Install
 

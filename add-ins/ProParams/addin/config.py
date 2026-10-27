@@ -17,7 +17,7 @@ REACT_DEV = True
 # that need a unique name. It's also recommended to use a company name as 
 # part of the ID to better ensure the ID is unique.
 ADDIN_NAME = 'ProParams'
-COMPANY_NAME = 'ConnorE'
+COMPANY_NAME = 'CHE'
 
 # Palettes
 sample_palette_id = f'{COMPANY_NAME}_{ADDIN_NAME}_palette_id'

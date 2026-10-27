@@ -4,7 +4,7 @@
     {
       "label": "Install Deps for All",
       "type": "shell",
-      "command": "call \"${workspaceFolder}\\add-ins\\CONstrainer\\scripts\\install_dependencies.bat\" && call \"${workspaceFolder}\\add-ins\\FileExplorer\\scripts\\install_dependencies.bat\" && call \"${workspaceFolder}\\add-ins\\ProParams\\scripts\\install_dependencies.bat\" && call \"${workspaceFolder}\\add-ins\\RestartAddIns\\scripts\\install_dependencies.bat\" && call \"${workspaceFolder}\\add-ins\\ScriptRunner\\scripts\\install_dependencies.bat\"",
+      "command": "call \"${workspaceFolder}\\.vscode\\install_all_dependencies.bat\"",
       "options": {
         "shell": {
           "executable": "cmd.exe",
@@ -24,7 +24,7 @@
     {
       "label": "Build All Add-Ins",
       "type": "shell",
-      "command": "call \"${workspaceFolder}\\add-ins\\CONstrainer\\scripts\\build_add_in.bat\" && call \"${workspaceFolder}\\add-ins\\FileExplorer\\scripts\\build_add_in.bat\" && call \"${workspaceFolder}\\add-ins\\ProParams\\scripts\\build_add_in.bat\" && call \"${workspaceFolder}\\add-ins\\RestartAddIns\\scripts\\build_add_in.bat\" && call \"${workspaceFolder}\\add-ins\\ScriptRunner\\scripts\\build_add_in.bat\"",
+      "command": "call \"${workspaceFolder}\\.vscode\\build_all_addins.bat\"",
       "group": {
         "kind": "build",
         "isDefault": true

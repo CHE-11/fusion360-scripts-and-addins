@@ -6,6 +6,7 @@ Scripts and add-ins for [Autodesk Fusion](https://www.autodesk.com/products/fusi
 | --- | --- | --- |
 | [ProParams](#proparams) | Add-in | `add-ins/ProParams/addin` |
 | [CONstrainer](#constrainer) | Add-in | `add-ins/CONstrainer/addin` |
+| [File Explorer](#file-explorer) | Add-in | `add-ins/FileExplorer/addin` |
 | [Script Runner](#script-runner) | Add-in | `add-ins/ScriptRunner/addin` |
 | [Restart Add-Ins](#restart-add-ins) | Add-in | `add-ins/RestartAddIns/addin` |
 | [Step File Body Combiner](#step-file-body-combiner) | Script | `scripts/Step-File-Body-Combiner` |
@@ -31,9 +32,9 @@ The script stays in that list. Run it again from the same dialog whenever you ne
 3. Select the add-in folder from the table above (`addin`, not the parent project folder).
 4. Select the add-in and click **Run**.
 
-The add-ins are set to run on startup. Palette HTML is already built into ProParams and CONstrainer, so there is no build step for normal use. Rebuild only when you change a React client. Script Runner and Restart Add-Ins are Python only. See [Developing the add-ins](#developing-the-add-ins).
+The add-ins are set to run on startup. Palette HTML is already built into ProParams, CONstrainer, and File Explorer, so there is no build step for normal use. Rebuild only when you change a React client. Script Runner and Restart Add-Ins are Python only. See [Developing the add-ins](#developing-the-add-ins).
 
-Palette commands are on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab, and **Utilities → ADD-INS**. Script Runner's dropdown and Restart Add-Ins' button are on the **Solid** tab and on the Scripts and Add-Ins panel.
+Palette commands are on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab **CHE** group, and **Utilities → ADD-INS**. ProParams and CONstrainer are on the Sketch tab. The Solid tab **CHE** group holds ProParams, CONstrainer, File Explorer, Script Runner, and Restart Add-Ins.
 
 **How to add commands to Panels**
 
@@ -46,7 +47,7 @@ RIBBON_TABS = (
 )
 ```
 
-`commands/.../entry.py` reads that list on start, creates the **CHE** panel if it is missing, and pins the command on it. These add-ins share `CHE_SketchPanel` and `CHE_SolidPanel`. On stop, an add-in removes its own control and deletes the panel only when nothing else is left on it. Add another tab by adding a tuple. `SketchTab` only appears while a sketch is open.
+`commands/.../entry.py` reads that list on start, creates the **CHE** panel if it is missing, and pins the command on it. ProParams and CONstrainer share `CHE_SketchPanel` and `CHE_SolidPanel`. File Explorer, Script Runner, and Restart Add-Ins use `CHE_SolidPanel` only. On stop, an add-in removes its own control and deletes the panel only when nothing else is left on it. Add another tab by adding a tuple. `SketchTab` only appears while a sketch is open.
 
 To list the tab and panel ids in your Fusion build, set the Text Commands window to **Py** and run:
 
@@ -83,9 +84,19 @@ Full tab behavior, the dev-server switch, and the build steps are in [`add-ins/C
 
 ---
 
+## File Explorer
+
+Browses the active hub’s projects and files from a palette docked on the right. Open, rename, move, and delete files and folders, and search the current project.
+
+The command is on the Design workspace **Solid** tab in the **CHE** group, and on **Utilities → ADD-INS**.
+
+Install, search limits, and the build steps are in [`add-ins/FileExplorer/README.md`](add-ins/FileExplorer/README.md).
+
+---
+
 ## Script Runner
 
-Adds a **Scripts** dropdown to the Design workspace **Solid** tab and to **Utilities → ADD-INS**. The menu lists the scripts you have saved (your scripts folder and any script linked with **+**). Sample scripts and add-ins are left out. Pick one to run it. Choose **Refresh** after you create or link a script.
+Adds a **Scripts** button to the Design workspace **Solid** tab **CHE** group and to **Utilities → ADD-INS**. Click it, choose a saved script, and click **Run**. The list is your scripts folder and any script linked with **+**. Sample scripts and add-ins are left out. Choose **Refresh** after you create or link a script.
 
 There is no palette and no client build. Install and behavior are in [`add-ins/ScriptRunner/README.md`](add-ins/ScriptRunner/README.md).
 
@@ -123,7 +134,7 @@ This is for sets of bodies that only need a short, ordered name, such as letter 
 
 ## Developing the add-ins
 
-ProParams and CONstrainer are a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads. Script Runner and Restart Add-Ins are Python only and have no client build.
+ProParams, CONstrainer, and File Explorer are a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads. Script Runner and Restart Add-Ins are Python only and have no client build.
 
 From the client folder (`add-ins/ProParams/client` or `add-ins/CONstrainer/client`):
 

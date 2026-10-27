@@ -28,9 +28,60 @@ IS_PROMOTED = True
 WORKSPACE_ID = config.WORKSPACE_ID
 PANEL_ID = config.PANEL_ID
 COMMAND_BESIDE_ID = config.COMMAND_BESIDE_ID
+RIBBON_TABS = config.RIBBON_TABS
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
 
 local_handlers = []
+
+
+def _toolbar_tab(tab_id):
+    workspace = ui.workspaces.itemById(WORKSPACE_ID)
+    if workspace:
+        tab = workspace.toolbarTabs.itemById(tab_id)
+        if tab:
+            return tab
+    all_tabs = getattr(ui, 'allToolbarTabs', None)
+    if all_tabs:
+        return all_tabs.itemById(tab_id)
+    return None
+
+
+def _place_on_tab(cmd_def, tab_id, panel_id, after_panel_id):
+    """Add the command to the shared CHE panel on a Design toolbar tab."""
+    tab = _toolbar_tab(tab_id)
+    if not tab:
+        futil.log(f'File Explorer: toolbar tab {tab_id} was not found.')
+        return
+    panel = tab.toolbarPanels.itemById(panel_id)
+    if not panel:
+        try:
+            panel = tab.toolbarPanels.add(panel_id, config.RIBBON_PANEL_NAME, after_panel_id, False)
+        except Exception:
+            futil.log(f'File Explorer: could not place a panel after {after_panel_id} on {tab_id}.')
+            try:
+                panel = tab.toolbarPanels.add(panel_id, config.RIBBON_PANEL_NAME, '', False)
+            except Exception:
+                futil.log(f'File Explorer: could not create panel on {tab_id}: {traceback.format_exc()}')
+                return
+    if panel.controls.itemById(CMD_ID):
+        return
+    control = panel.controls.addCommand(cmd_def)
+    control.isPromoted = IS_PROMOTED
+    control.isPromotedByDefault = IS_PROMOTED
+
+
+def _remove_tab_panel(tab_id, panel_id):
+    tab = _toolbar_tab(tab_id)
+    if not tab:
+        return
+    panel = tab.toolbarPanels.itemById(panel_id)
+    if not panel:
+        return
+    control = panel.controls.itemById(CMD_ID)
+    if control:
+        control.deleteMe()
+    if panel.controls.count == 0:
+        panel.deleteMe()
 
 
 def start():
@@ -41,6 +92,12 @@ def start():
     panel = workspace.toolbarPanels.itemById(PANEL_ID)
     control = panel.controls.addCommand(cmd_def, COMMAND_BESIDE_ID, False)
     control.isPromoted = IS_PROMOTED
+
+    for tab_id, panel_id, after_panel_id in RIBBON_TABS:
+        try:
+            _place_on_tab(cmd_def, tab_id, panel_id, after_panel_id)
+        except Exception:
+            futil.log(f'File Explorer: could not add the command to {tab_id}: {traceback.format_exc()}')
 
     try:
         futil.add_handler(app.documentActivated, on_document_activated)
@@ -54,12 +111,17 @@ def stop():
     except Exception:
         futil.log(f'Could not detach File Explorer: {traceback.format_exc()}')
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    panel = workspace.toolbarPanels.itemById(PANEL_ID)
-    command_control = panel.controls.itemById(CMD_ID)
-    command_definition = ui.commandDefinitions.itemById(CMD_ID)
-    palette = ui.palettes.itemById(PALETTE_ID)
+    panel = workspace.toolbarPanels.itemById(PANEL_ID) if workspace else None
+    command_control = panel.controls.itemById(CMD_ID) if panel else None
     if command_control:
         command_control.deleteMe()
+    for tab_id, panel_id, _after_panel_id in RIBBON_TABS:
+        try:
+            _remove_tab_panel(tab_id, panel_id)
+        except Exception:
+            futil.log(f'File Explorer: could not remove the panel from {tab_id}: {traceback.format_exc()}')
+    command_definition = ui.commandDefinitions.itemById(CMD_ID)
+    palette = ui.palettes.itemById(PALETTE_ID)
     if command_definition:
         command_definition.deleteMe()
     if palette:
@@ -128,6 +190,8 @@ def route_message(action, data):
         return _ok(browser.list_location(payload))
     if action == 'file:open':
         return _ok(browser.open_file(payload.get('id', '')))
+    if action == 'file:insert':
+        return _ok(browser.insert_file(payload.get('id', '')))
     if action == 'item:rename':
         return _ok(browser.rename_item(payload))
     if action == 'item:delete':

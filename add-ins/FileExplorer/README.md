@@ -4,8 +4,9 @@ File Explorer is a Fusion 360 add-in for browsing hub projects and files. It doc
 
 The palette shows the active hub, project, and folder. From a folder you can:
 
-- Search the open folder immediately, then keep searching the rest of the project
+- Search this project with the Search button or Enter. The open folder is listed first, then the rest of the project
 - Open a design or drawing, or switch to it if it is already open
+- Insert a Fusion design into the open design as a linked component. It has to be in the same project, and it is placed at the origin of the component you are editing
 - Rename a file or folder
 - Create a folder
 - Move a file to another folder in the same project
@@ -21,7 +22,7 @@ Folders load one level at a time. Project search walks the project in small batc
 3. Select the `add-ins/FileExplorer/addin` folder.
 4. Run **File Explorer**. It also starts with Fusion.
 
-The command is added to the Design workspace **Solid** scripts and add-ins panel. The palette docks on the right.
+The command is on the Design workspace **Solid** tab in the **CHE** group, and on **Utilities → ADD-INS**. The palette docks on the right.
 
 Set `REACT_DEV = True` in `addin/config.py` and run the Vite dev server when you want the palette to load `http://localhost:5176/` instead of the built page.
 

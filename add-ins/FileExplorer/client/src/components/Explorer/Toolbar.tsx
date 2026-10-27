@@ -7,6 +7,8 @@ type Props = {
   canCreate: boolean;
   onHub: (id: string) => void;
   onQuery: (value: string) => void;
+  onSearch: () => void;
+  onClear: () => void;
   onCreate: () => void;
   onRefresh: () => void;
   onRevealActive: () => void;
@@ -19,6 +21,8 @@ export function Toolbar({
   canCreate,
   onHub,
   onQuery,
+  onSearch,
+  onClear,
   onCreate,
   onRefresh,
   onRevealActive,
@@ -71,11 +75,20 @@ export function Toolbar({
           placeholder="Search this project"
           aria-label="Search this project"
           onChange={(event) => onQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            event.stopPropagation();
+            onSearch();
+          }}
           autoComplete="off"
           spellCheck={false}
         />
+        <button id="fx-search-submit" type="button" className="fx-searchSubmit" onClick={onSearch}>
+          Search
+        </button>
         {query && (
-          <button id="fx-search-clear" type="button" className="fx-searchClear" onClick={() => onQuery('')} aria-label="Clear search">
+          <button id="fx-search-clear" type="button" className="fx-searchClear" onClick={onClear} aria-label="Clear search">
             Clear
           </button>
         )}

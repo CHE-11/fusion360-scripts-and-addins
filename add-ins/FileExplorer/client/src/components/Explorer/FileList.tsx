@@ -24,8 +24,10 @@ type Props = {
   onRenameCommit: (node: ExplorerNode, name: string) => void;
   onRenameCancel: () => void;
   onWhereUsed: (node: ExplorerNode) => void;
+  onInsert: (node: ExplorerNode) => void;
   onMove: (node: ExplorerNode) => void;
   onDelete: (node: ExplorerNode) => void;
+  inserting: boolean;
   onCreate: (name: string) => void;
   onCancelCreate: () => void;
 };
@@ -45,8 +47,10 @@ export function FileList({
   onRenameCommit,
   onRenameCancel,
   onWhereUsed,
+  onInsert,
   onMove,
   onDelete,
+  inserting,
   onCreate,
   onCancelCreate,
 }: Props) {
@@ -89,8 +93,10 @@ export function FileList({
                       onRenameCommit={onRenameCommit}
                       onRenameCancel={onRenameCancel}
                       onWhereUsed={onWhereUsed}
+                      onInsert={onInsert}
                       onMove={onMove}
                       onDelete={onDelete}
+                      inserting={inserting}
                     />
                   ))}
                 </ul>

@@ -1,6 +1,10 @@
-"""Toolbar dropdown that lists saved Fusion scripts and runs the one you pick."""
+"""Toolbar button that lists saved Fusion scripts and runs the one you pick.
 
-import hashlib
+A pinned list control does not open its menu when the toolbar icon is clicked,
+and a standard list never marks the chosen row as selected. A normal button
+opens a dialog instead, which is what the toolbar click runs.
+"""
+
 import os
 import threading
 import traceback
@@ -14,24 +18,31 @@ app = adsk.core.Application.get()
 ui = app.userInterface
 
 CMD_PREFIX = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}'
-REFRESH_CMD_ID = f'{CMD_PREFIX}_Refresh'
-EMPTY_CMD_ID = f'{CMD_PREFIX}_Empty'
+LIST_CMD_ID = f'{CMD_PREFIX}_Scripts'
 RUN_EVENT_ID = f'{CMD_PREFIX}_run'
-REFRESH_TOKEN = f'{CMD_PREFIX}_refresh_token'
-UTILITIES_DROPDOWN_ID = f'{CMD_PREFIX}_UtilitiesDropdown'
-DROPDOWN_TEXT = 'Scripts'
+EMPTY_TOKEN = f'{CMD_PREFIX}_empty'
+SCRIPT_INPUT = 'script'
+DETAIL_INPUT = 'detail'
+REFRESH_INPUT = 'refresh'
+# Previous builds used drop-downs and a list command. Remove those controls on start.
+_LEGACY_CONTROL_IDS = (
+    f'{CMD_PREFIX}_UtilitiesDropdown',
+    f'{CMD_PREFIX}_SolidTabDropdown',
+    f'{CMD_PREFIX}_Refresh',
+    f'{CMD_PREFIX}_Empty',
+)
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
 
 # ScriptSourceLocations: user folder and scripts linked with the + button.
 _USER_LOCATION_VALUES = {2, 5}
 
-_dropdowns = []
-_script_handlers = []
-_command_folders = {}
+_dialog_actions = {}
+_dialog_details = {}
+_filling_dialog = False
 _pending_folders = set()
 _pending_lock = threading.Lock()
-_empty_message = (
-    'No saved scripts yet.\n\n'
+_NO_SCRIPTS_DETAIL = (
+    'No saved scripts yet.<br/><br/>'
     'Create or link one with Utilities → Scripts and Add-Ins, then choose Refresh.'
 )
 
@@ -46,54 +57,17 @@ class SavedScript:
 def start():
     _remove_ui()
     _register_run_event()
-    _create_static_commands()
-    _create_dropdowns()
-    rebuild()
+    _create_command()
+    _place_buttons()
 
 
 def stop():
     _remove_ui()
-    for command_id in (REFRESH_CMD_ID, EMPTY_CMD_ID):
-        _delete_definition(command_id)
-    _delete_script_commands()
+    _delete_definition(LIST_CMD_ID)
     try:
         app.unregisterCustomEvent(RUN_EVENT_ID)
     except Exception:
         pass
-
-
-def rebuild():
-    """Reload the dropdown from Fusion's saved scripts."""
-    global _empty_message
-    list_failed = False
-    try:
-        scripts = _saved_scripts()
-        _empty_message = (
-            'No saved scripts yet.\n\n'
-            'Create or link one with Utilities → Scripts and Add-Ins, then choose Refresh.'
-        )
-        futil.log(f'Script Runner: {len(scripts)} saved script(s).')
-    except Exception:
-        scripts = []
-        list_failed = True
-        futil.log(f'Script Runner: script list failed:\n{traceback.format_exc()}')
-        _empty_message = (
-            'Fusion did not return the script list.\n\n'
-            'Use Utilities → Scripts and Add-Ins, then choose Refresh.'
-        )
-
-    for dropdown in list(_dropdowns):
-        if _is_valid(dropdown):
-            _clear_controls(dropdown.controls)
-    _replace_script_commands(scripts)
-
-    empty_definition = ui.commandDefinitions.itemById(EMPTY_CMD_ID)
-    if empty_definition:
-        empty_definition.name = 'Scripts unavailable' if list_failed else 'No saved scripts'
-
-    for dropdown in list(_dropdowns):
-        if _is_valid(dropdown):
-            _fill_dropdown(dropdown, scripts)
 
 
 def _register_run_event():
@@ -105,158 +79,248 @@ def _register_run_event():
     futil.add_handler(event, _on_run_script)
 
 
-def _create_static_commands():
-    refresh = ui.commandDefinitions.itemById(REFRESH_CMD_ID)
-    if refresh is None:
-        refresh = ui.commandDefinitions.addButtonDefinition(
-            REFRESH_CMD_ID,
-            'Refresh',
-            'Reload the list of saved scripts',
-            ICON_FOLDER,
-        )
-        futil.add_handler(refresh.commandCreated, _on_refresh_created)
-
-    empty = ui.commandDefinitions.itemById(EMPTY_CMD_ID)
-    if empty is None:
-        empty = ui.commandDefinitions.addButtonDefinition(
-            EMPTY_CMD_ID,
-            'No saved scripts',
-            'No saved scripts are available to run',
-            ICON_FOLDER,
-        )
-        futil.add_handler(empty.commandCreated, _on_empty_created)
+def _create_command():
+    _delete_definition(LIST_CMD_ID)
+    definition = ui.commandDefinitions.addButtonDefinition(
+        LIST_CMD_ID,
+        'Scripts',
+        'Run a saved script',
+        ICON_FOLDER,
+    )
+    futil.add_handler(definition.commandCreated, _on_created)
 
 
-def _create_dropdowns():
+def _place_buttons():
+    definition = ui.commandDefinitions.itemById(LIST_CMD_ID)
+    if definition is None:
+        futil.log('Script Runner: Scripts command was not created.', adsk.core.LogLevels.ErrorLogLevel, True)
+        return
     panel = _utilities_panel()
     if panel:
-        dropdown = _add_dropdown(panel.controls, UTILITIES_DROPDOWN_ID, config.COMMAND_BESIDE_ID)
-        if dropdown:
-            _promote(dropdown)
+        _place_button(panel, definition, config.COMMAND_BESIDE_ID)
     else:
-        futil.log('Script Runner: Utilities ADD-INS panel was not found.')
+        futil.log('Script Runner: Utilities ADD-INS panel was not found.', adsk.core.LogLevels.WarningLogLevel, True)
 
     for tab_id, panel_id, after_panel_id in config.RIBBON_TABS:
         try:
             host = _panel_on_tab(tab_id, panel_id, after_panel_id)
         except Exception:
-            futil.log(f'Script Runner: could not add the dropdown to {tab_id}: {traceback.format_exc()}')
+            futil.log(f'Script Runner: could not add Scripts to {tab_id}: {traceback.format_exc()}')
             continue
         if not host:
             continue
-        dropdown_id = f'{CMD_PREFIX}_{tab_id}Dropdown'
-        dropdown = _add_dropdown(host.controls, dropdown_id, '')
-        if dropdown:
-            _promote(dropdown)
+        _place_button(host, definition, '')
 
 
-def _add_dropdown(controls, dropdown_id, beside_id):
-    existing = controls.itemById(dropdown_id)
+def _place_button(panel, definition, beside_id):
+    existing = panel.controls.itemById(LIST_CMD_ID)
     if existing:
         existing.deleteMe()
     try:
-        if beside_id:
-            dropdown = controls.addDropDown(DROPDOWN_TEXT, ICON_FOLDER, dropdown_id, beside_id, False)
+        if beside_id and panel.controls.itemById(beside_id):
+            control = panel.controls.addCommand(definition, beside_id, False)
         else:
-            dropdown = controls.addDropDown(DROPDOWN_TEXT, ICON_FOLDER, dropdown_id)
+            control = panel.controls.addCommand(definition)
     except Exception:
-        futil.log(f'Script Runner: could not place dropdown {dropdown_id}: {traceback.format_exc()}')
-        if not beside_id:
-            return None
-        leftover = controls.itemById(dropdown_id)
-        if leftover:
-            leftover.deleteMe()
+        futil.log(f'Script Runner: could not place Scripts on {panel.id}: {traceback.format_exc()}')
+        return
+    try:
+        control.isPromoted = True
+    except Exception:
+        futil.log(f'Script Runner: could not pin Scripts on {panel.id}: {traceback.format_exc()}')
+    try:
+        control.isPromotedByDefault = True
+    except Exception:
+        pass
+    futil.log(f'Script Runner: pinned Scripts on {panel.id}.')
+
+
+def _on_created(args: adsk.core.CommandCreatedEventArgs):
+    cmd = args.command
+    cmd.isRepeatable = False
+    cmd.okButtonText = 'Run'
+    cmd.cancelButtonText = 'Close'
+    try:
+        cmd.setDialogInitialSize(420, 220)
+    except Exception:
+        pass
+    _populate(cmd)
+    futil.add_handler(cmd.execute, _on_execute)
+    futil.add_handler(cmd.inputChanged, _on_input_changed)
+    futil.add_handler(cmd.validateInputs, _on_validate)
+    futil.log('Script Runner: opened the script list.')
+
+
+def _populate(cmd):
+    """Fill the dialog from Fusion's saved scripts."""
+    global _dialog_actions, _dialog_details, _filling_dialog
+    _filling_dialog = True
+    try:
+        scripts, error = _load_scripts()
+        inputs = cmd.commandInputs
+        dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
+        if dropdown is None:
+            dropdown = inputs.addDropDownCommandInput(
+                SCRIPT_INPUT,
+                'Script',
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+        detail = adsk.core.TextBoxCommandInput.cast(inputs.itemById(DETAIL_INPUT))
+        if detail is None:
+            detail = inputs.addTextBoxCommandInput(DETAIL_INPUT, '', '', 4, True)
+        if inputs.itemById(REFRESH_INPUT) is None:
+            _add_refresh_button(inputs)
+
+        actions = []
+        details = []
+        labels = []
+        if error:
+            labels.append('Scripts unavailable')
+            actions.append(EMPTY_TOKEN)
+            details.append(error)
+        elif not scripts:
+            labels.append('No saved scripts')
+            actions.append(EMPTY_TOKEN)
+            details.append(_NO_SCRIPTS_DETAIL)
+        else:
+            used_names = set()
+            for saved in scripts:
+                labels.append(_unique_name(saved, used_names))
+                actions.append(saved.folder)
+                details.append(_script_detail(saved))
+        _dialog_actions = dict(zip(labels, actions))
+        _dialog_details = dict(zip(labels, details))
+        _set_dropdown_labels(dropdown, labels)
+        detail.formattedText = details[0]
         try:
-            dropdown = controls.addDropDown(DROPDOWN_TEXT, ICON_FOLDER, dropdown_id)
-        except Exception:
-            futil.log(f'Script Runner: could not create dropdown {dropdown_id}: {traceback.format_exc()}')
-            return None
-    if dropdown:
-        try:
-            dropdown.name = DROPDOWN_TEXT
+            cmd.isOKButtonVisible = actions[0] != EMPTY_TOKEN
         except Exception:
             pass
-        _dropdowns.append(dropdown)
-    return dropdown
+    finally:
+        _filling_dialog = False
 
 
-def _fill_dropdown(dropdown, scripts):
-    controls = dropdown.controls
-    if scripts:
-        for command_id in _command_folders:
-            definition = ui.commandDefinitions.itemById(command_id)
-            if definition:
-                controls.addCommand(definition)
-    else:
-        empty = ui.commandDefinitions.itemById(EMPTY_CMD_ID)
-        if empty:
-            controls.addCommand(empty)
+def _add_refresh_button(inputs):
     try:
-        controls.addSeparator(f'{dropdown.id}_separator')
+        inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, '', False)
     except Exception:
-        futil.log(f'Script Runner: could not add a separator: {traceback.format_exc()}')
-    refresh = ui.commandDefinitions.itemById(REFRESH_CMD_ID)
-    if refresh:
-        controls.addCommand(refresh)
+        inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, ICON_FOLDER, False)
 
 
-def _replace_script_commands(scripts):
-    _delete_script_commands()
-    for saved in scripts:
-        command_id = _command_id(saved.folder)
-        definition = ui.commandDefinitions.addButtonDefinition(
-            command_id,
-            saved.name,
-            _tooltip(saved),
-            ICON_FOLDER,
+def _load_scripts():
+    try:
+        scripts = _saved_scripts()
+        futil.log(f'Script Runner: {len(scripts)} saved script(s).')
+        return scripts, ''
+    except Exception:
+        futil.log(f'Script Runner: script list failed:\n{traceback.format_exc()}')
+        return [], (
+            'Fusion did not return the script list.<br/><br/>'
+            'Use Utilities → Scripts and Add-Ins, then choose Refresh.'
         )
-        futil.add_handler(
-            definition.commandCreated,
-            _on_script_created,
-            local_handlers=_script_handlers,
-        )
-        _command_folders[command_id] = saved.folder
 
 
-def _delete_script_commands():
-    for command_id in list(_command_folders):
-        _delete_definition(command_id)
-    _command_folders.clear()
-    _script_handlers.clear()
-
-
-def _on_refresh_created(args: adsk.core.CommandCreatedEventArgs):
-    futil.add_handler(args.command.execute, _on_refresh_execute)
-
-
-def _on_refresh_execute(args: adsk.core.CommandEventArgs):
-    # Rebuild after this command closes. Deleting its control during execute is unsafe.
-    _schedule_run(REFRESH_TOKEN)
-
-
-def _on_empty_created(args: adsk.core.CommandCreatedEventArgs):
-    futil.add_handler(args.command.execute, _on_empty_execute)
-
-
-def _on_empty_execute(args: adsk.core.CommandEventArgs):
-    ui.messageBox(_empty_message, 'Script Runner')
-
-
-def _on_script_created(args: adsk.core.CommandCreatedEventArgs):
-    futil.add_handler(
-        args.command.execute,
-        _on_script_execute,
-        local_handlers=_script_handlers,
-    )
-
-
-def _on_script_execute(args: adsk.core.CommandEventArgs):
-    command_id = args.command.parentCommandDefinition.id
-    folder = _command_folders.get(command_id)
-    if not folder:
-        ui.messageBox('That script is no longer in the list. Choose Refresh.', 'Script Runner')
+def _on_input_changed(args: adsk.core.InputChangedEventArgs):
+    if _filling_dialog:
         return
-    _schedule_run(folder)
+    changed = args.input
+    if changed.id == REFRESH_INPUT:
+        button = adsk.core.BoolValueCommandInput.cast(changed)
+        if button is not None and not button.value:
+            return
+        if button is not None:
+            try:
+                button.value = False
+            except Exception:
+                pass
+        _populate(args.inputs.command)
+        return
+    if changed.id == SCRIPT_INPUT:
+        _show_selected_detail(args.inputs)
+
+
+def _on_validate(args: adsk.core.ValidateInputsEventArgs):
+    action = _selected_action(args.inputs)
+    args.areInputsValid = bool(action) and action != EMPTY_TOKEN
+
+
+def _on_execute(args: adsk.core.CommandEventArgs):
+    action = _selected_action(args.command.commandInputs)
+    if not action or action == EMPTY_TOKEN:
+        return
+    _schedule_run(action)
+
+
+def _selected_action(inputs):
+    name = _selected_name(inputs)
+    if not name:
+        return ''
+    return _dialog_actions.get(name, '')
+
+
+def _selected_name(inputs):
+    if inputs is None:
+        return ''
+    dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
+    if dropdown is None or dropdown.selectedItem is None:
+        return ''
+    return dropdown.selectedItem.name or ''
+
+
+def _show_selected_detail(inputs):
+    detail = adsk.core.TextBoxCommandInput.cast(inputs.itemById(DETAIL_INPUT))
+    name = _selected_name(inputs)
+    if detail is None or not name:
+        return
+    text = _dialog_details.get(name)
+    if text:
+        detail.formattedText = text
+
+
+def _set_dropdown_labels(dropdown, labels):
+    """Replace the rows. The selected row cannot be deleted, so a temporary row is selected first."""
+    items = dropdown.listItems
+    items.add(' ', True)
+    removed = 0
+    while items.count > 1 and removed < 200:
+        first = items.item(0)
+        if first is None or first.isSelected:
+            break
+        if not first.deleteMe():
+            break
+        removed += 1
+    for label in labels:
+        items.add(label, False)
+    if items.count < 2:
+        return
+    items.item(1).isSelected = True
+    if not items.item(0).deleteMe():
+        futil.log('Script Runner: could not remove the placeholder row from the script list.')
+
+
+def _script_detail(saved):
+    parts = []
+    description = (saved.description or '').strip()
+    if description and description != saved.name:
+        parts.append(_html(description))
+    if saved.folder:
+        parts.append(_html(saved.folder))
+    return '<br/>'.join(parts) or 'Run this script.'
+
+
+def _html(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _unique_name(saved, used_names):
+    name = saved.name
+    if name not in used_names:
+        used_names.add(name)
+        return name
+    suffix = os.path.basename(os.path.normpath(saved.folder)) or saved.folder
+    unique = f'{name} ({suffix})'
+    used_names.add(unique)
+    return unique
 
 
 def _schedule_run(folder):
@@ -280,23 +344,13 @@ def _schedule_run(folder):
 
 def _on_run_script(args: adsk.core.CustomEventArgs):
     folder = args.additionalInfo or ''
-    if folder == REFRESH_TOKEN:
-        try:
-            rebuild()
-        except Exception:
-            futil.handle_error('Refresh scripts', show_message_box=True)
-        finally:
-            with _pending_lock:
-                _pending_folders.discard(folder)
-        return
     try:
         script = _script_at(folder)
         if script is None:
             ui.messageBox(
-                'That script is no longer available. Choose Refresh in the Scripts menu.',
+                'That script is no longer available. Open Scripts and choose Refresh.',
                 'Script Runner',
             )
-            rebuild()
             return
         if getattr(script, 'isRunning', False):
             ui.messageBox(f'"{script.name}" is already running.', 'Script Runner')
@@ -402,22 +456,6 @@ def _script_at(folder):
     return None
 
 
-def _command_id(folder):
-    digest = hashlib.sha1(os.path.normcase(os.path.normpath(folder)).encode('utf-8')).hexdigest()[:16]
-    return f'{CMD_PREFIX}_Run_{digest}'
-
-
-def _tooltip(saved):
-    text = saved.description
-    if not text or text == saved.name:
-        text = saved.folder or f'Run {saved.name}'
-    elif saved.folder and saved.folder not in text:
-        text = f'{text}\n{saved.folder}'
-    if len(text) > 400:
-        text = text[:397] + '...'
-    return text
-
-
 def _utilities_panel():
     workspace = ui.workspaces.itemById(config.WORKSPACE_ID)
     if not workspace:
@@ -457,7 +495,6 @@ def _panel_on_tab(tab_id, panel_id, after_panel_id):
 
 
 def _remove_ui():
-    global _dropdowns
     for tab_id, panel_id, _after_panel_id in config.RIBBON_TABS:
         tab = _toolbar_tab(tab_id)
         if not tab:
@@ -465,25 +502,22 @@ def _remove_ui():
         panel = tab.toolbarPanels.itemById(panel_id)
         if not panel:
             continue
-        dropdown = panel.controls.itemById(f'{CMD_PREFIX}_{tab_id}Dropdown')
-        if dropdown:
-            dropdown.deleteMe()
+        _delete_panel_controls(panel)
         if panel.controls.count == 0:
             panel.deleteMe()
     panel = _utilities_panel()
     if panel:
-        control = panel.controls.itemById(UTILITIES_DROPDOWN_ID)
+        _delete_panel_controls(panel)
+
+
+def _delete_panel_controls(panel):
+    for control_id in (LIST_CMD_ID, *_LEGACY_CONTROL_IDS):
+        try:
+            control = panel.controls.itemById(control_id)
+        except Exception:
+            continue
         if control:
             control.deleteMe()
-    _dropdowns = []
-
-
-def _clear_controls(controls):
-    for _ in range(controls.count):
-        control = controls.item(controls.count - 1)
-        if not control:
-            break
-        control.deleteMe()
 
 
 def _delete_definition(command_id):
@@ -491,18 +525,3 @@ def _delete_definition(command_id):
     if definition:
         definition.deleteMe()
 
-
-def _promote(control):
-    for prop in ('isPromoted', 'isPromotedByDefault'):
-        if hasattr(control, prop):
-            try:
-                setattr(control, prop, True)
-            except Exception:
-                pass
-
-
-def _is_valid(obj):
-    try:
-        return bool(obj.isValid)
-    except Exception:
-        return False
