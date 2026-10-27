@@ -4,7 +4,7 @@
 	"id":	"a91e4c27-5b08-4f3d-8c6a-2e7d1b94f0c5",
 	"author":	"Connor E",
 	"description":	{
-		"":	"Run saved scripts from a toolbar dropdown"
+		"":	"Run saved scripts from a toolbar list"
 	},
 	"version":	"1.0.0",
 	"runOnStartup":	true,

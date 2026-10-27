@@ -2,7 +2,7 @@
 
 A pinned list control does not open its menu when the toolbar icon is clicked,
 and a standard list never marks the chosen row as selected. A normal button
-opens a dialog instead, which is what the toolbar click runs.
+opens a dialog with a scrollable list instead, which is what the toolbar click runs.
 """
 
 import os
@@ -22,8 +22,10 @@ LIST_CMD_ID = f'{CMD_PREFIX}_Scripts'
 RUN_EVENT_ID = f'{CMD_PREFIX}_run'
 EMPTY_TOKEN = f'{CMD_PREFIX}_empty'
 SCRIPT_INPUT = 'script'
+SCRIPT_ROW_PREFIX = 'script_row_'
 DETAIL_INPUT = 'detail'
 REFRESH_INPUT = 'refresh'
+_LIST_VISIBLE_ROWS = 8
 # Previous builds used drop-downs and a list command. Remove those controls on start.
 _LEGACY_CONTROL_IDS = (
     f'{CMD_PREFIX}_UtilitiesDropdown',
@@ -36,11 +38,13 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # ScriptSourceLocations: user folder and scripts linked with the + button.
 _USER_LOCATION_VALUES = {2, 5}
 
-_dialog_actions = {}
-_dialog_details = {}
+_dialog_actions = []
+_dialog_details = []
 _filling_dialog = False
 _pending_folders = set()
 _pending_lock = threading.Lock()
+_run_attempts = {}
+_MAX_RUN_ATTEMPTS = 15
 _NO_SCRIPTS_DETAIL = (
     'No saved scripts yet.<br/><br/>'
     'Create or link one with Utilities → Scripts and Add-Ins, then choose Refresh.'
@@ -141,7 +145,7 @@ def _on_created(args: adsk.core.CommandCreatedEventArgs):
     cmd.okButtonText = 'Run'
     cmd.cancelButtonText = 'Close'
     try:
-        cmd.setDialogInitialSize(420, 220)
+        cmd.setDialogInitialSize(440, 360)
     except Exception:
         pass
     _populate(cmd)
@@ -158,16 +162,10 @@ def _populate(cmd):
     try:
         scripts, error = _load_scripts()
         inputs = cmd.commandInputs
-        dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
-        if dropdown is None:
-            dropdown = inputs.addDropDownCommandInput(
-                SCRIPT_INPUT,
-                'Script',
-                adsk.core.DropDownStyles.TextListDropDownStyle,
-            )
+        table = _script_table(inputs)
         detail = adsk.core.TextBoxCommandInput.cast(inputs.itemById(DETAIL_INPUT))
         if detail is None:
-            detail = inputs.addTextBoxCommandInput(DETAIL_INPUT, '', '', 4, True)
+            detail = inputs.addTextBoxCommandInput(DETAIL_INPUT, '', '', 3, True)
         if inputs.itemById(REFRESH_INPUT) is None:
             _add_refresh_button(inputs)
 
@@ -188,23 +186,16 @@ def _populate(cmd):
                 labels.append(_unique_name(saved, used_names))
                 actions.append(saved.folder)
                 details.append(_script_detail(saved))
-        _dialog_actions = dict(zip(labels, actions))
-        _dialog_details = dict(zip(labels, details))
-        _set_dropdown_labels(dropdown, labels)
+        _dialog_actions = actions
+        _dialog_details = details
+        _fill_script_list(inputs, table, labels)
         detail.formattedText = details[0]
-        try:
-            cmd.isOKButtonVisible = actions[0] != EMPTY_TOKEN
-        except Exception:
-            pass
     finally:
         _filling_dialog = False
 
 
 def _add_refresh_button(inputs):
-    try:
-        inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, '', False)
-    except Exception:
-        inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, ICON_FOLDER, False)
+    inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, ICON_FOLDER, False)
 
 
 def _load_scripts():
@@ -235,7 +226,7 @@ def _on_input_changed(args: adsk.core.InputChangedEventArgs):
                 pass
         _populate(args.inputs.command)
         return
-    if changed.id == SCRIPT_INPUT:
+    if changed.id == SCRIPT_INPUT or changed.id.startswith(SCRIPT_ROW_PREFIX):
         _show_selected_detail(args.inputs)
 
 
@@ -251,51 +242,74 @@ def _on_execute(args: adsk.core.CommandEventArgs):
     _schedule_run(action)
 
 
+def _script_table(inputs):
+    table = adsk.core.TableCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
+    if table is not None:
+        return table
+    table = inputs.addTableCommandInput(SCRIPT_INPUT, '', 1, '1')
+    table.hasGrid = False
+    table.minimumVisibleRows = 1
+    table.maximumVisibleRows = _LIST_VISIBLE_ROWS
+    table.rowSpacing = 1
+    table.columnSpacing = 0
+    table.tablePresentationStyle = adsk.core.TablePresentationStyles.itemBorderTablePresentationStyle
+    return table
+
+
+def _fill_script_list(inputs, table, labels):
+    """Show every script as its own row. The highlighted row is the one Run uses."""
+    _remove_script_rows(inputs, table)
+    for index, label in enumerate(labels):
+        row = inputs.addTextBoxCommandInput(f'{SCRIPT_ROW_PREFIX}{index}', '', '', 1, True)
+        row.text = label
+        table.addCommandInput(row, index, 0, 0, 0)
+    if labels:
+        table.selectedRow = 0
+
+
+def _remove_script_rows(inputs, table):
+    try:
+        table.selectedRow = -1
+    except Exception:
+        pass
+    index = 0
+    while True:
+        row = inputs.itemById(f'{SCRIPT_ROW_PREFIX}{index}')
+        if row is None:
+            break
+        row.deleteMe()
+        index += 1
+    if table.rowCount:
+        table.clear()
+
+
 def _selected_action(inputs):
-    name = _selected_name(inputs)
-    if not name:
+    row = _selected_row(inputs)
+    if row < 0:
         return ''
-    return _dialog_actions.get(name, '')
+    return _dialog_actions[row]
 
 
-def _selected_name(inputs):
+def _selected_row(inputs):
     if inputs is None:
-        return ''
-    dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
-    if dropdown is None or dropdown.selectedItem is None:
-        return ''
-    return dropdown.selectedItem.name or ''
+        return -1
+    table = adsk.core.TableCommandInput.cast(inputs.itemById(SCRIPT_INPUT))
+    if table is None:
+        return -1
+    row = table.selectedRow
+    if row < 0 or row >= len(_dialog_actions):
+        return -1
+    return row
 
 
 def _show_selected_detail(inputs):
     detail = adsk.core.TextBoxCommandInput.cast(inputs.itemById(DETAIL_INPUT))
-    name = _selected_name(inputs)
-    if detail is None or not name:
+    row = _selected_row(inputs)
+    if detail is None or row < 0:
         return
-    text = _dialog_details.get(name)
+    text = _dialog_details[row]
     if text:
         detail.formattedText = text
-
-
-def _set_dropdown_labels(dropdown, labels):
-    """Replace the rows. The selected row cannot be deleted, so a temporary row is selected first."""
-    items = dropdown.listItems
-    items.add(' ', True)
-    removed = 0
-    while items.count > 1 and removed < 200:
-        first = items.item(0)
-        if first is None or first.isSelected:
-            break
-        if not first.deleteMe():
-            break
-        removed += 1
-    for label in labels:
-        items.add(label, False)
-    if items.count < 2:
-        return
-    items.item(1).isSelected = True
-    if not items.item(0).deleteMe():
-        futil.log('Script Runner: could not remove the placeholder row from the script list.')
 
 
 def _script_detail(saved):
@@ -329,21 +343,55 @@ def _schedule_run(folder):
         if folder in _pending_folders:
             return
         _pending_folders.add(folder)
+    _run_attempts[folder] = 0
+    _fire_run_later(folder)
 
+
+def _fire_run_later(folder):
     def _fire():
         try:
             app.fireCustomEvent(RUN_EVENT_ID, folder)
         except Exception:
-            with _pending_lock:
-                _pending_folders.discard(folder)
+            _finish_run(folder)
 
     timer = threading.Timer(0.2, _fire)
     timer.daemon = True
     timer.start()
 
 
+def _finish_run(folder):
+    _run_attempts.pop(folder, None)
+    with _pending_lock:
+        _pending_folders.discard(folder)
+
+
+def _command_is_idle():
+    """script.run starts another command. Calling it while one is still open corrupts the heap."""
+    try:
+        active = ui.activeCommand or ''
+    except Exception:
+        return True
+    return active in ('', 'SelectCommand')
+
+
 def _on_run_script(args: adsk.core.CustomEventArgs):
     folder = args.additionalInfo or ''
+    if not _command_is_idle():
+        attempt = _run_attempts.get(folder, 0) + 1
+        if attempt <= _MAX_RUN_ATTEMPTS:
+            _run_attempts[folder] = attempt
+            _fire_run_later(folder)
+            return
+        futil.log(f'Script Runner: Fusion was still in a command, so "{folder}" was not started.')
+        try:
+            ui.messageBox(
+                'Fusion was still closing the script list, so nothing was started. Choose the script again.',
+                'Script Runner',
+            )
+        except Exception:
+            pass
+        _finish_run(folder)
+        return
     try:
         script = _script_at(folder)
         if script is None:
@@ -355,14 +403,13 @@ def _on_run_script(args: adsk.core.CustomEventArgs):
         if getattr(script, 'isRunning', False):
             ui.messageBox(f'"{script.name}" is already running.', 'Script Runner')
             return
-        started = script.run()
+        started = script.run(False)
         if started is False:
             ui.messageBox(f'Fusion did not start "{script.name}".', 'Script Runner')
     except Exception:
         futil.handle_error('Run script', show_message_box=True)
     finally:
-        with _pending_lock:
-            _pending_folders.discard(folder)
+        _finish_run(folder)
 
 
 def _saved_scripts():

@@ -11,7 +11,10 @@ def run(context):
 
 def stop(context):
     try:
-        futil.clear_handlers()
         commands.stop()
     except:
         futil.handle_error('stop')
+    finally:
+        # Drop handlers only after the custom event is unregistered.
+        # Releasing them first frees the callback Fusion is still calling.
+        futil.clear_handlers()

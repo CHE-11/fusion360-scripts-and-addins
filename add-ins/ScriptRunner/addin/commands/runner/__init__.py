@@ -1,1 +1,1 @@
-# Script dropdown command package.
+# Script list command package.

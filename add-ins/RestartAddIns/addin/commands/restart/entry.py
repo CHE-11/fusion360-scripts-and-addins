@@ -216,15 +216,18 @@ def restart_user_addins():
                 failed.append((name, 'It was stopped and could not be found to start again.'))
                 continue
             try:
-                if not script.isRunning:
-                    started = script.run()
-                    if started is False:
-                        failed.append((name, 'Fusion did not start it. It is stopped.'))
-                        continue
                 if script.isRunning:
                     restarted.append(name)
-                else:
-                    failed.append((name, 'It stopped and did not start again.'))
+                    continue
+                # run() only queues the add-in. isRunning stays false until this
+                # handler returns, so checking it here reports a start that
+                # succeeds a moment later.
+                started = script.run()
+                if started is False:
+                    failed.append((name, 'Fusion did not start it. It is stopped.'))
+                    continue
+                restarted.append(name)
+                _pump_events()
             except Exception as error:
                 failed.append((name, _failure_text(error, 'Start failed. It is stopped.')))
                 futil.log(
