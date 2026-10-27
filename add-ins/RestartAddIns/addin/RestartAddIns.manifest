@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"c4e8a1d7-6b25-4f90-9c3e-2d7a5b8e1f04",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Restart every running user add-in"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}

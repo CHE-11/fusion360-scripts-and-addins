@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"a91e4c27-5b08-4f3d-8c6a-2e7d1b94f0c5",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Run saved scripts from a toolbar dropdown"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}

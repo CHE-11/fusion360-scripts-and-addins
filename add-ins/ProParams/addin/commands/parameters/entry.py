@@ -32,6 +32,7 @@ PALETTE_DOCK_POSITION_Y = 214  # Y position of the palette
 WORKSPACE_ID = 'FusionSolidEnvironment'
 PANEL_ID = 'SolidScriptsAddinsPanel'
 COMMAND_BESIDE_ID = 'ScriptsManagerCommand'
+RIBBON_TABS = config.RIBBON_TABS
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,56 @@ selected_feature_entity = None
 # ===========================================================================
 # Lifecycle
 # ===========================================================================
+def _toolbar_tab(tab_id):
+    workspace = ui.workspaces.itemById(WORKSPACE_ID)
+    if workspace:
+        tab = workspace.toolbarTabs.itemById(tab_id)
+        if tab:
+            return tab
+    all_tabs = getattr(ui, 'allToolbarTabs', None)
+    if all_tabs:
+        return all_tabs.itemById(tab_id)
+    return None
+
+
+def _place_on_tab(cmd_def, tab_id, panel_id, after_panel_id):
+    """Add a ProParams panel to a Design toolbar tab and pin the command on it."""
+    tab = _toolbar_tab(tab_id)
+    if not tab:
+        futil.log(f'ProParams: toolbar tab {tab_id} was not found.')
+        return
+    panel = tab.toolbarPanels.itemById(panel_id)
+    if not panel:
+        try:
+            panel = tab.toolbarPanels.add(panel_id, config.RIBBON_PANEL_NAME, after_panel_id, False)
+        except Exception:
+            futil.log(f'ProParams: could not place a panel after {after_panel_id} on {tab_id}.')
+            try:
+                panel = tab.toolbarPanels.add(panel_id, config.RIBBON_PANEL_NAME, '', False)
+            except Exception:
+                futil.log(f'ProParams: could not create panel on {tab_id}: {traceback.format_exc()}')
+                return
+    if panel.controls.itemById(CMD_ID):
+        return
+    control = panel.controls.addCommand(cmd_def)
+    control.isPromoted = IS_PROMOTED
+    control.isPromotedByDefault = IS_PROMOTED
+
+
+def _remove_tab_panel(tab_id, panel_id):
+    tab = _toolbar_tab(tab_id)
+    if not tab:
+        return
+    panel = tab.toolbarPanels.itemById(panel_id)
+    if not panel:
+        return
+    control = panel.controls.itemById(CMD_ID)
+    if control:
+        control.deleteMe()
+    if panel.controls.count == 0:
+        panel.deleteMe()
+
+
 def start():
     _load_settings()
     cmd_def = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_Description, ICON_FOLDER)
@@ -77,6 +128,12 @@ def start():
     panel = workspace.toolbarPanels.itemById(PANEL_ID)
     control = panel.controls.addCommand(cmd_def, COMMAND_BESIDE_ID, False)
     control.isPromoted = IS_PROMOTED
+
+    for tab_id, panel_id, after_panel_id in RIBBON_TABS:
+        try:
+            _place_on_tab(cmd_def, tab_id, panel_id, after_panel_id)
+        except Exception:
+            futil.log(f'ProParams: could not add the command to {tab_id}: {traceback.format_exc()}')
 
     # Register Custom Event for File Watcher (global store changes on disk).
     custom_event = app.registerCustomEvent(WATCHER_EVENT_ID)
@@ -103,13 +160,21 @@ def start():
 
 def stop():
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    panel = workspace.toolbarPanels.itemById(PANEL_ID)
-    command_control = panel.controls.itemById(CMD_ID)
+    panel = workspace.toolbarPanels.itemById(PANEL_ID) if workspace else None
+    command_control = panel.controls.itemById(CMD_ID) if panel else None
+    if command_control:
+        command_control.deleteMe()
+    for tab_id, panel_id, _after_panel_id in RIBBON_TABS:
+        try:
+            _remove_tab_panel(tab_id, panel_id)
+        except Exception:
+            futil.log(f'ProParams: could not remove the panel from {tab_id}: {traceback.format_exc()}')
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
     palette = ui.palettes.itemById(PALETTE_ID)
-    if command_control: command_control.deleteMe()
-    if command_definition: command_definition.deleteMe()
-    if palette: palette.deleteMe()
+    if command_definition:
+        command_definition.deleteMe()
+    if palette:
+        palette.deleteMe()
 
     # Stop Watcher
     stop_watcher_event.set()

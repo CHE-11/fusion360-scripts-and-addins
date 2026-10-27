@@ -1,0 +1,608 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import { onEvent, request, waitForAdsk } from '../../connector/fusionBridge';
+import type {
+  ActiveFileLocation,
+  ActiveFilePayload,
+  ExplorerNode,
+  Listing,
+  LocationTarget,
+  ReadyPayload,
+  ReferencesPayload,
+  SearchProgress,
+} from '../../types/types';
+import { errorMessage, newSearchId, sortNodes } from '../../utils/nodes';
+import { useToast } from '../common/Toast';
+import { Breadcrumb } from './Breadcrumb';
+import { ConfirmDialog } from './ConfirmDialog';
+import { DetailPanel } from './DetailPanel';
+import { FileList, type FileSection } from './FileList';
+import { MoveDialog } from './MoveDialog';
+import { Toolbar } from './Toolbar';
+
+type DetailState = {
+  fileId: string;
+  status: 'loading' | 'ready' | 'error';
+  data: ReferencesPayload | null;
+  message: string;
+};
+
+export function Explorer() {
+  const { showToast } = useToast();
+  const [hubs, setHubs] = useState<ExplorerNode[]>([]);
+  const [activeHubId, setActiveHubId] = useState('');
+  const [activeFileId, setActiveFileId] = useState('');
+  const [location, setLocation] = useState<ExplorerNode | null>(null);
+  const [crumbs, setCrumbs] = useState<ExplorerNode[]>([]);
+  const [children, setChildren] = useState<ExplorerNode[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [projectMatches, setProjectMatches] = useState<ExplorerNode[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
+  const [renameId, setRenameId] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [confirmNode, setConfirmNode] = useState<ExplorerNode | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [moveNode, setMoveNode] = useState<ExplorerNode | null>(null);
+  const [detail, setDetail] = useState<DetailState | null>(null);
+  const [detailNonce, setDetailNonce] = useState(0);
+  const [searchEpoch, setSearchEpoch] = useState(0);
+
+  const loadSeq = useRef(0);
+  const searchRef = useRef('');
+  const locationRef = useRef<ExplorerNode | null>(null);
+  const crumbsRef = useRef<ExplorerNode[]>([]);
+  const rowsRef = useRef<ExplorerNode[]>([]);
+  const selectedRef = useRef('');
+  const queryRef = useRef('');
+  const skipRenameCommit = useRef(false);
+  const refCache = useRef(new Map<string, ReferencesPayload>());
+  const openNodeRef = useRef<(node: ExplorerNode) => void>(() => {});
+
+  locationRef.current = location;
+  crumbsRef.current = crumbs;
+  selectedRef.current = selectedId;
+  queryRef.current = query;
+
+  const applyListing = useCallback((listing: Listing) => {
+    setLocation(listing.location);
+    setCrumbs(listing.crumbs);
+    setChildren(listing.children);
+    if (listing.activeFileId) setActiveFileId(listing.activeFileId);
+    if (listing.location.kind === 'hub') setActiveHubId(listing.location.id);
+    const hubCrumb = listing.crumbs.find((crumb) => crumb.kind === 'hub');
+    if (hubCrumb) setActiveHubId(hubCrumb.id);
+  }, []);
+
+  const load = useCallback(
+    async (target: LocationTarget, options?: { selectId?: string; keepQuery?: boolean }) => {
+      const seq = ++loadSeq.current;
+      setLoading(true);
+      setError('');
+      if (!options?.keepQuery) setQuery('');
+      try {
+        const listing = await request<Listing>('folder:list', target);
+        if (seq !== loadSeq.current) return;
+        applyListing(listing);
+        setSelectedId(options?.selectId ?? '');
+        setRenameId('');
+        setCreating(false);
+      } catch (err) {
+        if (seq !== loadSeq.current) return;
+        const message = errorMessage(err, 'Could not open that folder.');
+        if (locationRef.current) showToast(message, 'error');
+        else setError(message);
+      } finally {
+        if (seq === loadSeq.current) setLoading(false);
+      }
+    },
+    [applyListing, showToast]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      await waitForAdsk();
+      try {
+        const ready = await request<ReadyPayload>('ready');
+        if (cancelled) return;
+        setHubs(ready.hubs);
+        setActiveHubId(ready.activeHubId);
+        setActiveFileId(ready.activeFileId);
+        if (ready.listing) {
+          applyListing(ready.listing);
+          if (ready.listingError) showToast(ready.listingError, 'error');
+        } else {
+          setError(ready.listingError || 'No Fusion hub is available.');
+        }
+      } catch (err) {
+        if (!cancelled) setError(errorMessage(err, 'Could not reach Fusion.'));
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          window.setTimeout(() => document.getElementById('fx-search')?.focus(), 0);
+        }
+      }
+    })();
+
+    const offActive = onEvent('activeFileChanged', (raw) => {
+      try {
+        const data = JSON.parse(raw) as ActiveFilePayload;
+        setActiveFileId(data.activeFileId || '');
+      } catch {
+        // Ignore a malformed push from the add-in.
+      }
+    });
+    const offSearch = onEvent('searchProgress', (raw) => {
+      try {
+        const data = JSON.parse(raw) as SearchProgress;
+        if (data.searchId !== searchRef.current) return;
+        setProjectMatches((current) => sortNodes(dedupe([...current, ...data.matches])));
+        setSearchTruncated(data.truncated);
+        if (data.done) setSearching(false);
+      } catch {
+        // Ignore a malformed push from the add-in.
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      offActive();
+      offSearch();
+    };
+  }, [applyListing, showToast]);
+
+  const projectId = crumbs.find((crumb) => crumb.kind === 'project')?.id ?? '';
+
+  useEffect(() => {
+    const previous = searchRef.current;
+    searchRef.current = '';
+    if (previous) {
+      void request('search:cancel', { searchId: previous }).catch(() => {
+        // The walk may already have finished.
+      });
+    }
+    setProjectMatches([]);
+    setSearchTruncated(false);
+    const needle = query.trim();
+    if (!needle || !projectId) {
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const handle = window.setTimeout(() => {
+      const searchId = newSearchId();
+      searchRef.current = searchId;
+      setSearching(true);
+      void request('search:start', { searchId, query: needle, projectId }).catch((err) => {
+        if (searchRef.current !== searchId) return;
+        setSearching(false);
+        showToast(errorMessage(err, 'Search failed.'), 'error');
+      });
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [projectId, query, searchEpoch, showToast]);
+
+  const needle = query.trim().toLowerCase();
+  const localRows = needle ? children.filter((node) => node.name.toLowerCase().includes(needle)) : children;
+  const childIds = useMemo(() => new Set(children.map((node) => node.id)), [children]);
+  const otherRows = needle
+    ? sortNodes(projectMatches.filter((node) => !childIds.has(node.id) && node.name.toLowerCase().includes(needle)))
+    : [];
+  const sections: FileSection[] = needle
+    ? [
+        { id: 'here', title: 'In this folder', rows: localRows },
+        {
+          id: 'project',
+          title: searching ? 'In this project' : searchTruncated ? 'In this project, partial' : 'In this project',
+          rows: otherRows,
+        },
+      ]
+    : [{ id: 'all', title: '', rows: children }];
+  const visibleRows = sections.flatMap((section) => section.rows);
+  rowsRef.current = visibleRows;
+
+  const selected = useMemo(
+    () => visibleRows.find((node) => node.id === selectedId) ?? children.find((node) => node.id === selectedId) ?? null,
+    [children, selectedId, visibleRows]
+  );
+  const detailFile = selected?.kind === 'file' ? selected : null;
+
+  useEffect(() => {
+    if (!detailFile) {
+      setDetail(null);
+      return;
+    }
+    const cached = refCache.current.get(detailFile.id);
+    if (cached) {
+      setDetail({ fileId: detailFile.id, status: 'ready', data: cached, message: '' });
+      return;
+    }
+    let cancelled = false;
+    setDetail({ fileId: detailFile.id, status: 'loading', data: null, message: '' });
+    const timer = window.setTimeout(() => {
+      void request<ReferencesPayload>('file:references', { id: detailFile.id })
+        .then((data) => {
+          if (cancelled) return;
+          refCache.current.set(detailFile.id, data);
+          setDetail({ fileId: detailFile.id, status: 'ready', data, message: '' });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setDetail({
+            fileId: detailFile.id,
+            status: 'error',
+            data: null,
+            message: errorMessage(err, 'Could not load references.'),
+          });
+        });
+    }, 280);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [detailFile, detailNonce]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    document.getElementById(`fx-row-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId, children, projectMatches]);
+
+  const openNode = useCallback(
+    (node: ExplorerNode) => {
+      if (node.kind === 'file') {
+        setSelectedId(node.id);
+        void request('file:open', { id: node.id })
+          .then(() => setActiveFileId(node.id))
+          .catch((err) => showToast(errorMessage(err, 'Could not open that file.'), 'error'));
+        return;
+      }
+      if (node.kind === 'hub') setActiveHubId(node.id);
+      void load(node);
+    },
+    [load, showToast]
+  );
+  openNodeRef.current = openNode;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+      const searchFocused = target?.id === 'fx-search';
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        document.getElementById('fx-search')?.focus();
+        return;
+      }
+
+      if (event.key === 'Escape' && (confirmNode || moveNode)) {
+        event.preventDefault();
+        setConfirmNode(null);
+        setMoveNode(null);
+        return;
+      }
+      if (confirmNode || moveNode) return;
+
+      if (event.key === 'Escape') {
+        if (typing && !searchFocused) return;
+        if (selectedRef.current) {
+          event.preventDefault();
+          setSelectedId('');
+          return;
+        }
+        if (queryRef.current) {
+          event.preventDefault();
+          setQuery('');
+        }
+        return;
+      }
+
+      if (typing && !searchFocused) return;
+
+      const rows = rowsRef.current;
+      const index = rows.findIndex((row) => row.id === selectedRef.current);
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!rows.length) return;
+        event.preventDefault();
+        const nextIndex =
+          event.key === 'ArrowDown'
+            ? Math.min(rows.length - 1, index < 0 ? 0 : index + 1)
+            : Math.max(0, index < 0 ? 0 : index - 1);
+        setSelectedId(rows[nextIndex].id);
+        return;
+      }
+
+      if (event.key === 'Enter' && index >= 0) {
+        event.preventDefault();
+        openNodeRef.current(rows[index]);
+        return;
+      }
+
+      if (event.key === 'F2' && index >= 0) {
+        const node = rows[index];
+        if (node.kind === 'file' || node.kind === 'folder') {
+          event.preventDefault();
+          skipRenameCommit.current = false;
+          setCreating(false);
+          setRenameId(node.id);
+          setSelectedId(node.id);
+        }
+        return;
+      }
+
+      if (event.key === 'Delete' && index >= 0) {
+        const node = rows[index];
+        if (node.kind === 'file' || node.kind === 'folder') {
+          event.preventDefault();
+          setConfirmNode(node);
+        }
+        return;
+      }
+
+      if (event.key === 'Backspace' && (!searchFocused || !queryRef.current)) {
+        const trail = crumbsRef.current;
+        if (trail.length > 1) {
+          event.preventDefault();
+          openNodeRef.current(trail[trail.length - 2]);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmNode, moveNode]);
+
+  async function commitRename(node: ExplorerNode, name: string) {
+    if (skipRenameCommit.current) {
+      skipRenameCommit.current = false;
+      return;
+    }
+    const trimmed = name.trim();
+    setRenameId('');
+    if (!trimmed || trimmed === node.name) return;
+    try {
+      await request('item:rename', { id: node.id, kind: node.kind, name: trimmed });
+      refCache.current.delete(node.id);
+      showToast(`Renamed to ${trimmed}`, 'success');
+      setSearchEpoch((value) => value + 1);
+      if (locationRef.current) await load(locationRef.current, { selectId: node.id, keepQuery: true });
+    } catch (err) {
+      showToast(errorMessage(err, 'Fusion could not rename that.'), 'error');
+    }
+  }
+
+  async function commitCreate(name: string) {
+    const parent = locationRef.current;
+    const trimmed = name.trim();
+    if (!parent || !trimmed) {
+      setCreating(false);
+      return;
+    }
+    try {
+      const created = await request<ExplorerNode>('folder:create', {
+        parentId: parent.id,
+        parentKind: parent.kind,
+        name: trimmed,
+      });
+      setCreating(false);
+      showToast(`Created ${created.name}`, 'success');
+      setSearchEpoch((value) => value + 1);
+      await load(parent, { selectId: created.id, keepQuery: true });
+    } catch (err) {
+      showToast(errorMessage(err, 'Fusion could not create that folder.'), 'error');
+    }
+  }
+
+  async function confirmDelete() {
+    const node = confirmNode;
+    const parent = locationRef.current;
+    if (!node || !parent) return;
+    setConfirmBusy(true);
+    try {
+      await request('item:delete', { id: node.id, kind: node.kind });
+      refCache.current.delete(node.id);
+      if (selectedRef.current === node.id) setSelectedId('');
+      setConfirmNode(null);
+      showToast(`Deleted ${node.name}`, 'success');
+      setSearchEpoch((value) => value + 1);
+      await load(parent, { keepQuery: true });
+    } catch (err) {
+      setConfirmNode(null);
+      showToast(errorMessage(err, 'Fusion could not delete that.'), 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
+
+  async function revealActive() {
+    try {
+      const result = await request<ActiveFileLocation>('nav:activeFile');
+      loadSeq.current += 1;
+      applyListing(result.listing);
+      setQuery('');
+      setSelectedId(result.fileId);
+      setActiveFileId(result.fileId);
+      setRenameId('');
+      setCreating(false);
+      setLoading(false);
+    } catch (err) {
+      showToast(errorMessage(err, 'The open design is not in a project yet.'), 'error');
+    }
+  }
+
+  function retryReferences() {
+    if (!detailFile) return;
+    refCache.current.delete(detailFile.id);
+    setDetailNonce((value) => value + 1);
+  }
+
+  const canCreate = location?.kind === 'project' || location?.kind === 'folder';
+  const title = location?.name || 'File Explorer';
+  let emptyTitle = 'Empty folder';
+  let emptyMessage = 'This folder does not have any files yet.';
+  if (needle && searching) {
+    emptyTitle = 'Searching';
+    emptyMessage = 'Looking through the rest of the project.';
+  } else if (needle) {
+    emptyTitle = 'No matches';
+    emptyMessage = `Nothing in this project is named “${query.trim()}”.`;
+  } else if (location?.kind === 'hub') {
+    emptyTitle = 'No projects';
+    emptyMessage = 'This hub does not have any projects yet.';
+  }
+
+  return (
+    <div id="fx-app">
+      {loading && <div id="fx-progress" className="fx-progress" />}
+      <header id="fx-header">
+        <div id="fx-header-copy">
+          <p id="fx-kicker">File Explorer</p>
+          <h1 id="fx-title">{title}</h1>
+        </div>
+      </header>
+      <Toolbar
+        hubs={hubs}
+        activeHubId={activeHubId}
+        query={query}
+        canCreate={canCreate}
+        onHub={(id) => {
+          setActiveHubId(id);
+          const hub = hubs.find((item) => item.id === id);
+          if (hub) void load(hub);
+        }}
+        onQuery={setQuery}
+        onCreate={() => {
+          setRenameId('');
+          setCreating(true);
+        }}
+        onRefresh={() => {
+          if (location) void load(location, { selectId: selectedId, keepQuery: true });
+        }}
+        onRevealActive={() => void revealActive()}
+      />
+      {location && <Breadcrumb crumbs={crumbs} onOpen={openNode} />}
+      {!location && error && (
+        <div id="fx-boot-error" className="fx-empty">
+          <p id="fx-boot-error-title" className="fx-emptyTitle">
+            Could not open the hub
+          </p>
+          <p id="fx-boot-error-message" className="fx-emptyMessage">
+            {error}
+          </p>
+          <button id="fx-boot-retry" type="button" className="fx-primaryButton" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {location && (
+        <FileList
+          sections={sections}
+          selectedId={selectedId}
+          activeFileId={activeFileId}
+          renameId={renameId}
+          creating={creating}
+          loading={loading}
+          emptyTitle={emptyTitle}
+          emptyMessage={emptyMessage}
+          onSelect={(node) => {
+            setSelectedId(node.id);
+            setRenameId('');
+          }}
+          onOpen={openNode}
+          onRenameStart={(node) => {
+            skipRenameCommit.current = false;
+            setCreating(false);
+            setSelectedId(node.id);
+            setRenameId(node.id);
+          }}
+          onRenameCommit={(node, name) => void commitRename(node, name)}
+          onRenameCancel={() => {
+            skipRenameCommit.current = true;
+            setRenameId('');
+          }}
+          onWhereUsed={(node) => setSelectedId(node.id)}
+          onMove={(node) => {
+            setSelectedId(node.id);
+            setMoveNode(node);
+          }}
+          onDelete={(node) => {
+            setSelectedId(node.id);
+            setConfirmNode(node);
+          }}
+          onCreate={(name) => void commitCreate(name)}
+          onCancelCreate={() => setCreating(false)}
+        />
+      )}
+      {!location && loading && (
+        <div id="fx-boot-skeletons" className="fx-skeletons" aria-hidden="true">
+          {Array.from({ length: 7 }, (_, index) => (
+            <div id={`fx-boot-skeleton-${index}`} key={index} className="fx-skeleton" />
+          ))}
+        </div>
+      )}
+      {detailFile && (
+        <DetailPanel
+          file={detailFile}
+          status={detail && detail.fileId === detailFile.id ? detail.status : 'loading'}
+          data={detail && detail.fileId === detailFile.id ? detail.data : null}
+          message={detail && detail.fileId === detailFile.id ? detail.message : ''}
+          onClose={() => setSelectedId('')}
+          onOpen={openNode}
+          onReveal={(node) => {
+            if (!node.parentId) {
+              showToast('That file does not have a folder to show.', 'error');
+              return;
+            }
+            void load({ id: node.parentId, kind: 'folder' }, { selectId: node.id });
+          }}
+          onRetry={retryReferences}
+        />
+      )}
+      {!detailFile && location && (
+        <footer id="fx-hints">
+          <span id="fx-hint-keys">Enter open · F2 rename · Del delete · Backspace up</span>
+          {searching && <span id="fx-hint-search">Searching…</span>}
+          {searchTruncated && !searching && <span id="fx-hint-truncated">Search stopped early</span>}
+        </footer>
+      )}
+      {confirmNode && (
+        <ConfirmDialog
+          node={confirmNode}
+          busy={confirmBusy}
+          onCancel={() => setConfirmNode(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
+      {moveNode && (
+        <MoveDialog
+          file={moveNode}
+          projectId={moveNode.projectId || projectId}
+          onClose={() => setMoveNode(null)}
+          onMoved={() => {
+            const parent = locationRef.current;
+            showToast(`Moved ${moveNode.name}`, 'success');
+            refCache.current.delete(moveNode.id);
+            setSearchEpoch((value) => value + 1);
+            setMoveNode(null);
+            if (parent) void load(parent, { selectId: moveNode.id, keepQuery: true });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function dedupe(nodes: ExplorerNode[]): ExplorerNode[] {
+  const seen = new Set<string>();
+  const unique: ExplorerNode[] = [];
+  nodes.forEach((node) => {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    unique.push(node);
+  });
+  return unique;
+}

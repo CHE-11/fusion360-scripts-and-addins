@@ -1,11 +1,13 @@
 # Fusion Scripts and Add-Ins
 
-Scripts and add-ins for [Autodesk Fusion](https://www.autodesk.com/products/fusion-360/overview). Scripts run once from the Scripts and Add-Ins dialog. Add-ins stay loaded, start with Fusion, and open a palette from the Design workspace **Solid** scripts and add-ins panel.
+Scripts and add-ins for [Autodesk Fusion](https://www.autodesk.com/products/fusion-360/overview). Scripts run once from the Scripts and Add-Ins dialog. Add-ins stay loaded and start with Fusion. Palette add-ins open from the Design workspace **Solid** scripts and add-ins panel.
 
 | Name | Kind | Folder |
 | --- | --- | --- |
 | [ProParams](#proparams) | Add-in | `add-ins/ProParams/addin` |
 | [CONstrainer](#constrainer) | Add-in | `add-ins/CONstrainer/addin` |
+| [Script Runner](#script-runner) | Add-in | `add-ins/ScriptRunner/addin` |
+| [Restart Add-Ins](#restart-add-ins) | Add-in | `add-ins/RestartAddIns/addin` |
 | [Step File Body Combiner](#step-file-body-combiner) | Script | `scripts/Step-File-Body-Combiner` |
 | [Renamer](#renamer) | Script | `scripts/Renamer` |
 
@@ -29,7 +31,35 @@ The script stays in that list. Run it again from the same dialog whenever you ne
 3. Select the add-in folder from the table above (`addin`, not the parent project folder).
 4. Select the add-in and click **Run**.
 
-Both add-ins are set to run on startup. The palette HTML is already built into each add-in, so there is no build step for normal use. Rebuild only when you change the React client. See [Developing the add-ins](#developing-the-add-ins).
+The add-ins are set to run on startup. Palette HTML is already built into ProParams and CONstrainer, so there is no build step for normal use. Rebuild only when you change a React client. Script Runner and Restart Add-Ins are Python only. See [Developing the add-ins](#developing-the-add-ins).
+
+Palette commands are on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab, and **Utilities → ADD-INS**. Script Runner's dropdown and Restart Add-Ins' button are on the **Solid** tab and on the Scripts and Add-Ins panel.
+
+**How to add commands to Panels**
+
+Each add-in creates its command once, then places that same command on toolbar panels. The **Utilities → ADD-INS** button comes from `PANEL_ID` (`SolidScriptsAddinsPanel`) in the Design workspace (`FusionSolidEnvironment`). Further panels are the `RIBBON_TABS` list in the add-in's `config.py`. Each entry is the tab id, the shared panel id, and the existing panel to insert after:
+
+```python
+RIBBON_TABS = (
+    ('SketchTab', 'CHE_SketchPanel', 'SketchConstraintsPanel'),
+    ('SolidTab', 'CHE_SolidPanel', 'SolidAssemblePanel'),
+)
+```
+
+`commands/.../entry.py` reads that list on start, creates the **CHE** panel if it is missing, and pins the command on it. These add-ins share `CHE_SketchPanel` and `CHE_SolidPanel`. On stop, an add-in removes its own control and deletes the panel only when nothing else is left on it. Add another tab by adding a tuple. `SketchTab` only appears while a sketch is open.
+
+To list the tab and panel ids in your Fusion build, set the Text Commands window to **Py** and run:
+
+```python
+ws = adsk.core.Application.get().userInterface.workspaces.itemById('FusionSolidEnvironment')
+for tab in ws.toolbarTabs:
+    print(f'TAB {tab.id} | {tab.name}')
+    for panel in tab.toolbarPanels:
+        print(f'  PANEL {panel.id} | {panel.name}')
+```
+
+Stop and run the add-in again after changing `RIBBON_TABS`.
+
 
 ---
 
@@ -50,6 +80,24 @@ Creates and manages sketch geometric constraints, assembly joints, and assembly 
 The palette has four tabs: **Sketches**, **Joints**, **Assembly constraints**, and **Help**. Joints and assembly constraints appear for assembly and hybrid designs. Fusion’s add-in API for assembly constraints is still a preview, so new assembly constraints are created in Fusion, not in this palette.
 
 Full tab behavior, the dev-server switch, and the build steps are in [`add-ins/CONstrainer/README.md`](add-ins/CONstrainer/README.md).
+
+---
+
+## Script Runner
+
+Adds a **Scripts** dropdown to the Design workspace **Solid** tab and to **Utilities → ADD-INS**. The menu lists the scripts you have saved (your scripts folder and any script linked with **+**). Sample scripts and add-ins are left out. Pick one to run it. Choose **Refresh** after you create or link a script.
+
+There is no palette and no client build. Install and behavior are in [`add-ins/ScriptRunner/README.md`](add-ins/ScriptRunner/README.md).
+
+---
+
+## Restart Add-Ins
+
+Stops and starts every running user add-in from a **Restart Add-Ins** button on the Solid tab and the Scripts and Add-Ins panel. Fusion's built-in add-ins and samples stay as they are. Add-ins that are already stopped stay stopped. This add-in stays loaded, so the button is still there after the restart.
+
+Use it after editing another add-in when Fusion should load that new code without a full restart.
+
+**Folder:** `add-ins/RestartAddIns/addin`
 
 ---
 
@@ -75,7 +123,7 @@ This is for sets of bodies that only need a short, ordered name, such as letter 
 
 ## Developing the add-ins
 
-Each add-in is a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads.
+ProParams and CONstrainer are a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads. Script Runner and Restart Add-Ins are Python only and have no client build.
 
 From the client folder (`add-ins/ProParams/client` or `add-ins/CONstrainer/client`):
 

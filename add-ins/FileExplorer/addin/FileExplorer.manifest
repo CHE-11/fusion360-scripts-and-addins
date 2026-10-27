@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"b6d1e4a2-3c70-4f18-9a55-7e2c8d0b41f6",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Browse, search, and manage Fusion projects and files"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}

@@ -16,3 +16,11 @@ DEV_PALETTE_URL = 'http://localhost:5173/'
 WORKSPACE_ID = 'FusionSolidEnvironment'
 PANEL_ID = 'SolidScriptsAddinsPanel'
 COMMAND_BESIDE_ID = 'ScriptsManagerCommand'
+
+# Shared CHE panels, inserted after the named panel.
+# SketchTab is contextual and shows while a sketch is being edited.
+RIBBON_PANEL_NAME = 'CHE'
+RIBBON_TABS = (
+    ('SketchTab', 'CHE_SketchPanel', 'SketchConstraintsPanel'),
+    ('SolidTab', 'CHE_SolidPanel', 'SolidAssemblePanel'),
+)

@@ -37,6 +37,14 @@ if not os.path.exists(USER_DIR_PATH):
 # Design Workspace
 design_workspace = 'FusionSolidEnvironment'
 
+# Shared CHE panels, inserted after the named panel.
+# SketchTab is contextual and shows while a sketch is being edited.
+RIBBON_PANEL_NAME = 'CHE'
+RIBBON_TABS = (
+    ('SketchTab', 'CHE_SketchPanel', 'SketchConstraintsPanel'),
+    ('SolidTab', 'CHE_SolidPanel', 'SolidAssemblePanel'),
+)
+
 # Tabs
 design_utilities_tab_id = f'ToolsTab'
 design_utilities_tab_name = f'UTILITIES'

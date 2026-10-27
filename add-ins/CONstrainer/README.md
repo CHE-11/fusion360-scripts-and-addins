@@ -18,7 +18,7 @@ Sketch dimensions stay in ProParams. Rigid groups and contact sets are not manag
 3. Select the `add-ins/CONstrainer/addin` folder.
 4. Run **CONstrainer**. It also starts with Fusion.
 
-The command is added to the Design workspace **Solid** scripts and add-ins panel. The palette docks on the right.
+The command is on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab, and **Utilities → ADD-INS**. The palette docks on the right.
 
 Set `REACT_DEV = True` in `addin/config.py` and run the Vite dev server when you want the palette to load `http://localhost:5173/` instead of the built page.
 
