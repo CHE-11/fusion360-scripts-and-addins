@@ -2,13 +2,16 @@
 
 Fusion's data API is main-thread only, and every folder listing is a network
 call. Listings stay one folder deep. A background crawl reads one folder per
-turn and stores names locally. Search filters that index instead of walking
-the project again.
+`index:step` request and stores names locally. Search filters that index
+instead of walking the project again.
+
+The palette drives the crawl. Custom events fired from a worker thread while
+the palette waits on a reply leave that reply undelivered, so every data API
+call here happens inside a palette request.
 """
 
 import json
 import os
-import threading
 import time
 import traceback
 from collections import deque
@@ -20,58 +23,36 @@ from ...lib import fusionAddInUtils as futil
 
 app = adsk.core.Application.get()
 
-SEARCH_EVENT_ID = 'CHE_FileExplorer_searchTick'
 INDEX_FILE_CAP = 20000
-INDEX_STALE_SECONDS = 15 * 60
+# Browsing keeps visited folders current, so a full re-walk is rarely needed.
+INDEX_STALE_SECONDS = 6 * 60 * 60
+INDEX_SAVE_SECONDS = 10
+LISTING_TTL_SECONDS = 60
 _INVALID_NAME = set('<>:"/\\|?*')
 
 _cache = {}
 _indexes = {}
+_listings = {}
 _active_crawl = ''
-_tick_due = False
-_pause_until = 0.0
-_request_depth = 0
 _search = None
-_push = None
-_local_handlers = []
-
-
-def attach(push):
-    """Register the index tick. `push(action, payload)` sends palette events."""
-    global _push
-    _push = push
-    try:
-        app.unregisterCustomEvent(SEARCH_EVENT_ID)
-    except Exception:
-        pass
-    event = app.registerCustomEvent(SEARCH_EVENT_ID)
-    futil.add_handler(event, _on_index_tick, local_handlers=_local_handlers)
 
 
 def detach():
-    global _search, _push, _active_crawl, _tick_due
+    global _search, _active_crawl
     _search = None
     _active_crawl = ''
-    _tick_due = False
+    _listings.clear()
     for state in list(_indexes.values()):
         _save_index_sync(state)
-    _push = None
-    try:
-        app.unregisterCustomEvent(SEARCH_EVENT_ID)
-    except Exception:
-        pass
-    _local_handlers.clear()
 
 
-def enter_request():
-    """Palette requests and index ticks share Fusion's main thread."""
-    global _request_depth
-    _request_depth += 1
+def index_pending():
+    """True while a search is waiting on the crawl.
 
-
-def leave_request():
-    global _request_depth
-    _request_depth = max(0, _request_depth - 1)
+    Every crawl step blocks Fusion for about a second, so the crawl only runs
+    while the user is searching. Clearing the search pauses it in place.
+    """
+    return bool(_active_crawl and _search and _search['project_id'] == _active_crawl)
 
 
 def ready():
@@ -114,9 +95,10 @@ def ready():
 
 
 def list_location(data):
-    _pause_index()
     kind = data.get('kind') if isinstance(data, dict) else ''
     item_id = data.get('id') if isinstance(data, dict) else ''
+    if isinstance(data, dict) and data.get('refresh'):
+        _listings.clear()
     if kind == 'hub':
         return _list_hub(_require(item_id, 'hub'))
     if kind == 'project':
@@ -127,7 +109,6 @@ def list_location(data):
 
 
 def open_file(file_id):
-    _pause_index()
     if not file_id:
         raise ValueError('Choose a file to open.')
     for document in _each(app.documents):
@@ -142,7 +123,6 @@ def open_file(file_id):
 
 def insert_file(file_id):
     """Insert a Fusion design into the active component as a linked occurrence."""
-    _pause_index()
     if not file_id:
         raise ValueError('Choose a design to insert.')
     data_file = _require(file_id, 'file')
@@ -187,7 +167,6 @@ def insert_file(file_id):
 
 
 def rename_item(data):
-    _pause_index()
     kind = data.get('kind')
     item_id = data.get('id') or ''
     name = _clean_name(data.get('name'))
@@ -213,7 +192,6 @@ def rename_item(data):
 
 
 def delete_item(data):
-    _pause_index()
     kind = data.get('kind')
     item_id = data.get('id') or ''
     if kind == 'file':
@@ -238,7 +216,6 @@ def delete_item(data):
 
 
 def create_folder(data):
-    _pause_index()
     parent_kind = data.get('parentKind')
     parent_id = data.get('parentId') or ''
     name = _clean_name(data.get('name'))
@@ -261,7 +238,6 @@ def create_folder(data):
 
 
 def move_file(data):
-    _pause_index()
     file_id = data.get('id') or ''
     target_id = data.get('targetFolderId') or ''
     data_file = _require(file_id, 'file')
@@ -286,13 +262,12 @@ def move_file(data):
 
 
 def references(file_id):
-    _pause_index()
     data_file = _require(file_id, 'file')
     parents, parent_error = _collect_refs(data_file, 'parentReferences', 'designs that use this file')
     children, child_error = _collect_refs(data_file, 'childReferences', 'files this design uses')
     warning = ' '.join(part for part in (parent_error, child_error) if part)
     return {
-        'file': _file_node(data_file),
+        'file': _file_node(data_file, has_parents=bool(parents), has_children=bool(children)),
         'parents': _sort_nodes(parents),
         'children': _sort_nodes(children),
         'warning': warning,
@@ -300,7 +275,6 @@ def references(file_id):
 
 
 def nav_active_file():
-    _pause_index()
     data_file = _active_file()
     if not data_file:
         raise ValueError('The open design is not saved to a Fusion project.')
@@ -329,21 +303,32 @@ def start_search(data):
         'id': search_id,
         'query': query,
         'project_id': project.id,
-        'sent': False,
     }
+    building = False
     if state['walking']:
-        if _active_crawl != project.id:
-            _kick_crawl(project.id)
+        _kick_crawl(project.id)
+        building = True
     elif _walk_needed(state):
         state['wants_walk'] = True
         _kick_crawl(project.id)
-    else:
-        _kick_crawl(project.id)
-    return {'searchId': search_id, 'started': True, 'indexed': bool(state['complete'])}
+        building = True
+    progress = _search_progress(
+        _search,
+        state,
+        _matching_nodes(state['nodes'], query),
+        done=bool(state['complete']) or not building,
+        replace=True,
+    )
+    return {
+        'searchId': search_id,
+        'started': True,
+        'indexed': bool(state['complete']),
+        'progress': progress,
+    }
 
 
 def cancel_search(data):
-    """Stop delivering matches. The project crawl keeps running."""
+    """Stop delivering matches. The crawl pauses and resumes on the next search."""
     global _search
     search_id = data.get('searchId') if isinstance(data, dict) else ''
     if _search and _search['id'] == search_id:
@@ -351,57 +336,52 @@ def cancel_search(data):
     return {'cancelled': True}
 
 
-def _on_index_tick(args: adsk.core.CustomEventArgs):
-    global _tick_due
-    _tick_due = False
-    project_id = _active_crawl
-    if not project_id:
-        return
-    # Never touch the data API, or push into the palette, while it is still
-    # answering an HTML request. Fusion deadlocks if those overlap.
-    if _request_depth:
-        _schedule_index_tick(project_id)
-        return
+def index_step():
+    """Read one folder of the active crawl.
 
-    _flush_search()
-    if time.monotonic() < _pause_until:
-        _schedule_index_tick(project_id)
-        return
-
-    state = _indexes.get(project_id)
-    if state and state.get('wants_walk') and not state['walking'] and _walk_needed(state):
-        state['wants_walk'] = False
-        project = _cached_obj(project_id, 'project')
-        if project is None:
-            project = _safe(lambda: _require(project_id, 'project'))
-        root = _safe(lambda: project.rootFolder) if project else None
-        if root:
-            _remember(root, 'folder')
-            _arm_walk(state, root)
-        else:
-            state['retry_after'] = time.monotonic() + 60
-    elif state:
-        state['wants_walk'] = False
-
-    if not state or not state['queue']:
-        if state and state['walking']:
-            _complete_walk(state)
+    Returns search progress for the running search when this folder changed it.
+    """
+    if not index_pending():
         _resume_next()
-        return
+        return {'progress': None}
+    state = _indexes.get(_active_crawl)
+    if not state:
+        _resume_next()
+        return {'progress': None}
 
-    fresh = _index_one_folder(state)
-    _publish_fresh(state, fresh)
+    if state.get('wants_walk') and not state['walking'] and _walk_needed(state):
+        _start_walk(state)
+    else:
+        state['wants_walk'] = False
+
+    progress = None
     if state['queue']:
-        _schedule_index_tick(project_id)
-        return
-    _complete_walk(state)
+        fresh = _index_one_folder(state)
+        progress = _fresh_progress(state, fresh)
+        if state['queue']:
+            return {'progress': progress}
+
+    if state['walking']:
+        _complete_walk(state)
     _resume_next()
+    for other in _indexes.values():
+        if other.get('dirty'):
+            _save_index(other)
+    return {'progress': _full_progress(state) or progress}
 
 
-def _pause_index(seconds=0.45):
-    """Let a folder click finish before the next cloud listing."""
-    global _pause_until
-    _pause_until = max(_pause_until, time.monotonic() + seconds)
+def _start_walk(state):
+    state['wants_walk'] = False
+    project_id = state['project_id']
+    project = _cached_obj(project_id, 'project')
+    if project is None:
+        project = _safe(lambda: _require(project_id, 'project'))
+    root = _safe(lambda: project.rootFolder) if project else None
+    if root:
+        _remember(root, 'folder')
+        _arm_walk(state, root)
+    else:
+        state['retry_after'] = time.monotonic() + 60
 
 
 def _note_project(project):
@@ -435,24 +415,6 @@ def _arm_walk(state, root):
     state['wants_walk'] = False
 
 
-def _flush_search():
-    search = _search
-    if not search or search.get('sent'):
-        return
-    state = _indexes.get(search['project_id'])
-    if not state:
-        return
-    search['sent'] = True
-    _emit_search(
-        search,
-        state,
-        _matching_nodes(state['nodes'], search['query']),
-        done=bool(state['complete']),
-        replace=True,
-        cancelled=False,
-    )
-
-
 def _complete_walk(state):
     state['walking'] = False
     if state.get('visited'):
@@ -466,21 +428,21 @@ def _complete_walk(state):
             state['complete'] = False
     state['pending'] = {}
     state['queue'] = deque()
-    _save_index_async(state, force=True)
-    _publish_full(state)
+    _save_index(state, force=True)
 
 
 def _resume_next():
-    current = _indexes.get(_active_crawl)
-    if current and current['queue']:
-        current['walking'] = True
-        _kick_crawl(_active_crawl)
+    """Keep crawling the searched project while it has work left, else stop.
+
+    Other half-walked projects keep their queue and resume on their next search.
+    """
+    global _active_crawl
+    project_id = _search['project_id'] if _search else ''
+    state = _indexes.get(project_id)
+    if state and (state['queue'] or (state.get('wants_walk') and _walk_needed(state))):
+        _active_crawl = project_id
         return
-    for project_id, state in _indexes.items():
-        if state['queue']:
-            state['walking'] = True
-            _kick_crawl(project_id)
-            return
+    _active_crawl = ''
 
 
 def _index_one_folder(state):
@@ -531,76 +493,53 @@ def _index_one_folder(state):
             state['nodes'][node['id']] = node
     state['folders_done'] = state.get('folders_done', 0) + 1
     if state['folders_done'] % 25 == 0:
-        _save_index_async(state)
+        _save_index(state)
     return fresh
 
 
-def _publish_fresh(state, fresh):
+def _fresh_progress(state, fresh):
     search = _search
     if not fresh or not search or search['project_id'] != state['project_id']:
-        return
+        return None
     if state['complete']:
-        return
+        return None
     matches = [node for node in fresh if search['query'] in (node.get('name') or '').lower()]
     if not matches:
-        return
-    _emit_search(search, state, matches, done=False, replace=False, cancelled=False)
+        return None
+    return _search_progress(search, state, matches, done=False, replace=False)
 
 
-def _publish_full(state):
+def _full_progress(state):
     search = _search
     if not search or search['project_id'] != state['project_id']:
-        return
+        return None
     building = bool(state['walking'] and not state['complete'])
-    _emit_search(
+    return _search_progress(
         search,
         state,
         _matching_nodes(state['nodes'], search['query']),
         done=not building,
         replace=True,
-        cancelled=False,
     )
 
 
-def _emit_search(search, state, matches, done, replace, cancelled):
-    if not _push or not search:
-        return
-    building = bool(state and state['walking'] and not state['complete'])
-    _push('searchProgress', {
+def _search_progress(search, state, matches, done, replace):
+    building = bool(state['walking'] and not state['complete'])
+    return {
         'searchId': search['id'],
         'matches': matches,
-        'scanned': state['scanned'] if state else 0,
+        'scanned': state['scanned'],
         'done': done,
-        'truncated': bool(state and state['truncated']),
-        'cancelled': cancelled,
+        'truncated': bool(state['truncated']),
+        'cancelled': False,
         'replace': replace,
         'indexing': bool(building and not done),
-    })
-
-
-def _schedule_index_tick(project_id):
-    """Hop off the main thread, then read one folder on the next custom event."""
-    global _tick_due
-    if _tick_due or not project_id:
-        return
-    _tick_due = True
-
-    def _kick():
-        global _tick_due
-        time.sleep(0.05)
-        try:
-            app.fireCustomEvent(SEARCH_EVENT_ID, project_id)
-        except Exception:
-            _tick_due = False
-            futil.log(f'Could not continue indexing: {traceback.format_exc()}')
-
-    threading.Thread(target=_kick, daemon=True).start()
+    }
 
 
 def _kick_crawl(project_id):
     global _active_crawl
     _active_crawl = project_id
-    _schedule_index_tick(project_id)
 
 
 def _new_index(project_id):
@@ -674,27 +613,16 @@ def _snapshot_index(state):
     }
 
 
-def _save_index_async(state, force=False):
-    now = time.monotonic()
-    if not force and now - state.get('saved_at', 0) < 3:
+def _mark_dirty(state):
+    """Listings and edits only flag the index. Crawl steps and stop() write it."""
+    state['dirty'] = True
+
+
+def _save_index(state, force=False):
+    if not force and time.monotonic() - state.get('saved_at', 0) < INDEX_SAVE_SECONDS:
         state['dirty'] = True
         return
-    state['dirty'] = False
-    state['saved_at'] = now
-    snapshot = _snapshot_index(state)
-    path = _index_file(state['project_id'])
-
-    def _write():
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            temporary = f'{path}.{threading.get_ident()}.tmp'
-            with open(temporary, 'w', encoding='utf-8') as handle:
-                json.dump(snapshot, handle, separators=(',', ':'))
-            os.replace(temporary, path)
-        except Exception:
-            futil.log(f'Could not save the project index: {traceback.format_exc()}')
-
-    threading.Thread(target=_write, daemon=True).start()
+    _save_index_sync(state)
 
 
 def _save_index_sync(state):
@@ -717,13 +645,9 @@ def _save_index_sync(state):
 def _remember_listing(project, folder, children):
     if not project:
         return
-    _pause_index()
     _remember(project, 'project')
     state = _note_project(project)
     _absorb_children(state, folder.id, children)
-    if _walk_needed(state):
-        state['wants_walk'] = True
-        _kick_crawl(project.id)
 
 
 def _absorb_children(state, parent_id, children):
@@ -735,7 +659,7 @@ def _absorb_children(state, parent_id, children):
         trees.append(pending)
     for tree in trees:
         _replace_children(tree, parent_id, children)
-    _save_index_async(state)
+    _mark_dirty(state)
 
 
 def _replace_children(tree, parent_id, children):
@@ -769,7 +693,7 @@ def _upsert_indexed(node):
     if state.get('walking') and isinstance(pending, dict):
         pending[node_id] = node
     state['updated'] = time.time()
-    _save_index_async(state)
+    _mark_dirty(state)
 
 
 def _forget_indexed(item_id):
@@ -786,7 +710,7 @@ def _forget_indexed(item_id):
                 _drop_node(tree, item_id)
                 changed = True
         if changed:
-            _save_index_async(state)
+            _mark_dirty(state)
 
 
 def _drop_node(tree, node_id):
@@ -849,8 +773,24 @@ def _still_valid(obj):
         return False
 
 
+def _cached_listing(container_id):
+    """Each listing costs Fusion two blocking content fetches per folder."""
+    cached = _listings.get(container_id)
+    if not cached or time.monotonic() - cached[0] > LISTING_TTL_SECONDS:
+        return None
+    return dict(cached[1], activeFileId=_active_file_id())
+
+
+def _store_listing(listing):
+    _listings[listing['containerId']] = (time.monotonic(), listing)
+    return listing
+
+
 def _list_hub(hub):
     _remember(hub, 'hub')
+    cached = _cached_listing(hub.id)
+    if cached:
+        return cached
     projects = []
     try:
         collection = hub.dataProjects
@@ -862,13 +802,13 @@ def _list_hub(hub):
         if root:
             _remember(root, 'folder')
         projects.append(_project_node(project, hub.id))
-    return {
+    return _store_listing({
         'location': _hub_node(hub),
         'crumbs': [_hub_node(hub)],
         'children': _sort_nodes(projects),
         'activeFileId': _active_file_id(),
         'containerId': hub.id,
-    }
+    })
 
 
 def _list_project(project):
@@ -882,6 +822,9 @@ def _list_project(project):
 
 def _list_folder_obj(folder):
     _remember(folder, 'folder')
+    cached = _cached_listing(folder.id)
+    if cached:
+        return cached
     project = _safe(lambda: folder.parentProject)
     hub = _safe(lambda: project.parentHub) if project else None
     if project:
@@ -909,13 +852,13 @@ def _list_folder_obj(folder):
         location = _folder_node(folder, project_id)
     _remember_listing(project, folder, children)
 
-    return {
+    return _store_listing({
         'location': location,
         'crumbs': _crumbs(folder, project, hub),
         'children': _sort_nodes(children),
         'activeFileId': _active_file_id(),
         'containerId': folder.id,
-    }
+    })
 
 
 def _crumbs(folder, project, hub):
@@ -971,7 +914,9 @@ def _folder_node(folder, project_id=''):
     return _node(folder.id, 'folder', folder.name, parent_id=parent_id, project_id=project_id, has_children=True)
 
 
-def _file_node(data_file, parent_id='', project_id=''):
+def _file_node(data_file, parent_id='', project_id='', has_parents=False, has_children=False):
+    """Reference flags cost two network calls per file, so listings leave them
+    False. `references()` fills them in from the lists it already loaded."""
     if not parent_id:
         parent = _safe(lambda: data_file.parentFolder)
         if parent:
@@ -984,8 +929,6 @@ def _file_node(data_file, parent_id='', project_id=''):
         extension = (data_file.fileExtension or '').lstrip('.').lower()
     except Exception:
         extension = ''
-    has_parents = _safe_bool(lambda: data_file.hasParentReferences)
-    has_children = _safe_bool(lambda: data_file.hasChildReferences)
     return _node(
         data_file.id,
         'file',
@@ -1172,6 +1115,7 @@ def _clean_name(name):
 
 
 def _refresh_panel():
+    _listings.clear()
     _safe(lambda: app.data.refreshDataPanel())
 
 

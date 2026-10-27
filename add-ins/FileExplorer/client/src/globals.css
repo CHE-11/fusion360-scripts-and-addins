@@ -554,7 +554,7 @@ button:disabled {
 
 #fx-detail {
   border-top: 1px solid var(--fx-line);
-  background: rgba(16, 19, 24, 0.92);
+  background: #222831;
   max-height: 46%;
   overflow: auto;
   box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.18);
@@ -567,8 +567,9 @@ button:disabled {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  background: rgba(20, 23, 28, 0.94);
-  backdrop-filter: blur(8px);
+  background: #2b323d;
+  border-top: 2px solid var(--fx-accent-strong);
+  border-bottom: 1px solid var(--fx-line-strong);
 }
 
 .fx-detailTitles {

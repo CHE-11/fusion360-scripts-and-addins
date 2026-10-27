@@ -4,12 +4,13 @@ import type { ExplorerNode } from '../../types/types';
 
 type Props = {
   node: ExplorerNode;
+  usedByCount: number;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 };
 
-export function ConfirmDialog({ node, busy, onCancel, onConfirm }: Props) {
+export function ConfirmDialog({ node, usedByCount, busy, onCancel, onConfirm }: Props) {
   useEffect(() => {
     document.getElementById('fx-confirm-cancel')?.focus();
   }, []);
@@ -18,7 +19,7 @@ export function ConfirmDialog({ node, busy, onCancel, onConfirm }: Props) {
   let message = 'This removes it from the project. Fusion cannot undo the delete.';
   if (node.kind === 'folder') {
     message = 'Fusion only deletes empty folders. Files inside have to be moved or deleted first.';
-  } else if (node.hasParents) {
+  } else if (node.hasParents || usedByCount > 0) {
     message = 'Other designs use this file. Deleting it can break those references.';
   }
 

@@ -8,13 +8,16 @@
 import type {
   ActiveFileLocation,
   ExplorerNode,
+  IndexStepPayload,
   Listing,
   ReadyPayload,
   ReferencesPayload,
 } from '../types/types';
 import { sortNodes } from '../utils/nodes';
 
-export type FusionResponse<T> = { ok: true; data: T } | { ok: false; error: string };
+export type FusionResponse<T> =
+  | { ok: true; data: T; indexPending?: boolean }
+  | { ok: false; error: string };
 
 export class FusionError extends Error {}
 
@@ -94,11 +97,25 @@ export function waitForAdsk(): Promise<boolean> {
 
 installHandler();
 
-export async function request<T = unknown>(action: string, payload?: unknown): Promise<T> {
-  if (!hasAdsk()) {
-    return mockRequest<T>(action, payload);
-  }
+/*
+ * The add-in indexes projects one folder per `index:step` request. Steps only
+ * go out after the palette has been quiet for INDEX_IDLE_MS, and user requests
+ * wait for a running step, so Fusion never handles both at once. Each step
+ * blocks Fusion for about a second, so the gap between steps leaves it time to
+ * redraw and handle input.
+ */
+const INDEX_IDLE_MS = 450;
+const INDEX_STEP_GAP_MS = 250;
+const INDEX_STEP_WAIT_MS = 15000;
 
+let userRequests = 0;
+let lastRequestAt = 0;
+let indexTimer: number | null = null;
+let indexStep: Promise<unknown> | null = null;
+
+type Envelope<T> = { data: T; indexPending: boolean };
+
+async function send<T>(action: string, payload?: unknown): Promise<Envelope<T>> {
   const raw = await Promise.resolve(window.adsk!.fusionSendData(action, JSON.stringify(payload ?? {})));
   if (raw == null || raw === '') {
     throw new FusionError(`Empty response from Fusion for "${action}"`);
@@ -108,14 +125,68 @@ export async function request<T = unknown>(action: string, payload?: unknown): P
   try {
     parsed = JSON.parse(raw) as FusionResponse<T>;
   } catch {
-    return raw as unknown as T;
+    return { data: raw as unknown as T, indexPending: false };
   }
 
   if (parsed && typeof parsed === 'object' && 'ok' in parsed) {
-    if (parsed.ok) return parsed.data;
+    if (parsed.ok) return { data: parsed.data, indexPending: Boolean(parsed.indexPending) };
     throw new FusionError(parsed.error || `Fusion rejected "${action}"`);
   }
-  return parsed as T;
+  return { data: parsed as T, indexPending: false };
+}
+
+function waitForIndexStep(): Promise<unknown> {
+  if (!indexStep) return Promise.resolve();
+  return Promise.race([
+    indexStep.catch(() => undefined),
+    new Promise((resolve) => window.setTimeout(resolve, INDEX_STEP_WAIT_MS)),
+  ]);
+}
+
+function scheduleIndexStep(delay = INDEX_IDLE_MS) {
+  if (indexTimer !== null || indexStep) return;
+  indexTimer = window.setTimeout(() => void runIndexStep(), delay);
+}
+
+async function runIndexStep() {
+  indexTimer = null;
+  const idleFor = Date.now() - lastRequestAt;
+  if (userRequests > 0 || idleFor < INDEX_IDLE_MS) {
+    scheduleIndexStep(Math.max(INDEX_STEP_GAP_MS, INDEX_IDLE_MS - idleFor));
+    return;
+  }
+
+  let pending = false;
+  const step = send<IndexStepPayload>('index:step');
+  indexStep = step;
+  try {
+    const { data, indexPending } = await step;
+    pending = indexPending;
+    if (data?.progress) dispatchEvent('searchProgress', JSON.stringify(data.progress));
+  } catch (error) {
+    console.error('[FileExplorer] index step failed', error);
+  } finally {
+    indexStep = null;
+  }
+  if (pending) scheduleIndexStep(INDEX_STEP_GAP_MS);
+}
+
+export async function request<T = unknown>(action: string, payload?: unknown): Promise<T> {
+  if (!hasAdsk()) {
+    return mockRequest<T>(action, payload);
+  }
+
+  userRequests += 1;
+  lastRequestAt = Date.now();
+  try {
+    await waitForIndexStep();
+    const { data, indexPending } = await send<T>(action, payload);
+    if (indexPending) scheduleIndexStep();
+    return data;
+  } finally {
+    userRequests -= 1;
+    lastRequestAt = Date.now();
+  }
 }
 
 export function sendJsLog(level: string, message: string, extra?: unknown) {

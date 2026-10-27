@@ -47,6 +47,17 @@ export type SearchProgress = {
   indexing?: boolean;
 };
 
+export type SearchStartPayload = {
+  searchId: string;
+  started: boolean;
+  indexed?: boolean;
+  progress?: SearchProgress;
+};
+
+export type IndexStepPayload = {
+  progress: SearchProgress | null;
+};
+
 export type ActiveFilePayload = {
   activeFileId: string;
 };

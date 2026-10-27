@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 
 import adsk.core
@@ -85,7 +86,6 @@ def _remove_tab_panel(tab_id, panel_id):
 
 
 def start():
-    browser.attach(_push)
     cmd_def = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_DESCRIPTION, ICON_FOLDER)
     futil.add_handler(cmd_def.commandCreated, command_created)
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
@@ -172,18 +172,18 @@ def palette_incoming(html_args: adsk.core.HTMLEventArgs):
             message_data = json.loads(html_args.data)
         except Exception:
             message_data = html_args.data
-    browser.enter_request()
+    started = time.perf_counter()
     try:
-        try:
-            html_args.returnData = route_message(html_args.action, message_data)
-        except ValueError as exc:
-            futil.log(f"Rejected '{html_args.action}': {exc}")
-            html_args.returnData = _err(exc)
-        except Exception:
-            futil.log(f"Error handling '{html_args.action}': {traceback.format_exc()}")
-            html_args.returnData = _err('Something went wrong in Fusion. Details are in the Text Commands window.')
-    finally:
-        browser.leave_request()
+        html_args.returnData = route_message(html_args.action, message_data)
+    except ValueError as exc:
+        futil.log(f"Rejected '{html_args.action}': {exc}")
+        html_args.returnData = _err(exc)
+    except Exception:
+        futil.log(f"Error handling '{html_args.action}': {traceback.format_exc()}")
+        html_args.returnData = _err('Something went wrong in Fusion. Details are in the Text Commands window.')
+    elapsed = time.perf_counter() - started
+    if elapsed > 1:
+        futil.log(f"File Explorer: '{html_args.action}' took {elapsed:.1f}s")
 
 
 def route_message(action, data):
@@ -212,6 +212,8 @@ def route_message(action, data):
         return _ok(browser.start_search(payload))
     if action == 'search:cancel':
         return _ok(browser.cancel_search(payload))
+    if action == 'index:step':
+        return _ok(browser.index_step())
     if action == 'jsLog':
         _handle_js_log(payload)
         return _ok()
@@ -276,7 +278,7 @@ def _handle_js_log(message_data):
 
 
 def _ok(data=None):
-    return json.dumps({'ok': True, 'data': data})
+    return json.dumps({'ok': True, 'data': data, 'indexPending': browser.index_pending()})
 
 
 def _err(message):

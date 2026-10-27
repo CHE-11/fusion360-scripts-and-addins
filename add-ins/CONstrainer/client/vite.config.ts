@@ -20,6 +20,11 @@ export default defineConfig({
     cssCodeSplit: false,
     rollupOptions: {
       output: {
+        // The palette loads this as a classic script beside Fusion's injected
+        // bridge. Top-level minified names would land on `window` and can
+        // replace Fusion's globals such as `qt`, which carries the web channel
+        // that delivers fusionSendData replies.
+        format: 'iife',
         inlineDynamicImports: true,
       },
     },

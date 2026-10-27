@@ -10,7 +10,7 @@
 #  UNINTERRUPTED OR ERROR FREE.
 
 from . import commands
-from .lib import fusion360utils as futil
+from .lib import fusionAddInUtils as futil
 
 
 def run(context):

@@ -507,16 +507,13 @@ def _report(restarted, failed):
 
     message = '\n'.join(lines)
     futil.log(message, force_console=True)
-    icon = (
-        adsk.core.MessageBoxIconTypes.WarningIconType
-        if failed
-        else adsk.core.MessageBoxIconTypes.InformationIconType
-    )
+    if not failed:
+        return
     ui.messageBox(
         message,
         'Restart Add-Ins',
         adsk.core.MessageBoxButtonTypes.OKButtonType,
-        icon,
+        adsk.core.MessageBoxIconTypes.WarningIconType,
     )
 
 

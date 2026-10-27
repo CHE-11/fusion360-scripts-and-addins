@@ -20,6 +20,7 @@ ui = app.userInterface
 CMD_PREFIX = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}'
 LIST_CMD_ID = f'{CMD_PREFIX}_Scripts'
 RUN_EVENT_ID = f'{CMD_PREFIX}_run'
+REFRESH_EVENT_ID = f'{CMD_PREFIX}_refreshList'
 EMPTY_TOKEN = f'{CMD_PREFIX}_empty'
 SCRIPT_INPUT = 'script'
 SCRIPT_ROW_PREFIX = 'script_row_'
@@ -41,10 +42,14 @@ _USER_LOCATION_VALUES = {2, 5}
 _dialog_actions = []
 _dialog_details = []
 _filling_dialog = False
+_open_command = None
+_refresh_pending = False
 _pending_folders = set()
 _pending_lock = threading.Lock()
 _run_attempts = {}
 _MAX_RUN_ATTEMPTS = 15
+# Long enough for the click handler to return before the list is rebuilt.
+_REFRESH_DELAY = 0.1
 _NO_SCRIPTS_DETAIL = (
     'No saved scripts yet.<br/><br/>'
     'Create or link one with Utilities → Scripts and Add-Ins, then choose Refresh.'
@@ -61,26 +66,39 @@ class SavedScript:
 def start():
     _remove_ui()
     _register_run_event()
+    _register_refresh_event()
     _create_command()
     _place_buttons()
 
 
 def stop():
+    global _open_command, _refresh_pending
+    _open_command = None
+    _refresh_pending = False
     _remove_ui()
     _delete_definition(LIST_CMD_ID)
-    try:
-        app.unregisterCustomEvent(RUN_EVENT_ID)
-    except Exception:
-        pass
+    for event_id in (RUN_EVENT_ID, REFRESH_EVENT_ID):
+        try:
+            app.unregisterCustomEvent(event_id)
+        except Exception:
+            pass
 
 
 def _register_run_event():
+    _register_custom_event(RUN_EVENT_ID, _on_run_script)
+
+
+def _register_refresh_event():
+    _register_custom_event(REFRESH_EVENT_ID, _on_refresh_list)
+
+
+def _register_custom_event(event_id, handler):
     try:
-        app.unregisterCustomEvent(RUN_EVENT_ID)
+        app.unregisterCustomEvent(event_id)
     except Exception:
         pass
-    event = app.registerCustomEvent(RUN_EVENT_ID)
-    futil.add_handler(event, _on_run_script)
+    event = app.registerCustomEvent(event_id)
+    futil.add_handler(event, handler)
 
 
 def _create_command():
@@ -140,7 +158,9 @@ def _place_button(panel, definition, beside_id):
 
 
 def _on_created(args: adsk.core.CommandCreatedEventArgs):
+    global _open_command
     cmd = args.command
+    _open_command = cmd
     cmd.isRepeatable = False
     cmd.okButtonText = 'Run'
     cmd.cancelButtonText = 'Close'
@@ -149,10 +169,16 @@ def _on_created(args: adsk.core.CommandCreatedEventArgs):
     except Exception:
         pass
     _populate(cmd)
+    futil.add_handler(cmd.destroy, _on_destroyed)
     futil.add_handler(cmd.execute, _on_execute)
     futil.add_handler(cmd.inputChanged, _on_input_changed)
     futil.add_handler(cmd.validateInputs, _on_validate)
     futil.log('Script Runner: opened the script list.')
+
+
+def _on_destroyed(_args: adsk.core.CommandEventArgs):
+    global _open_command
+    _open_command = None
 
 
 def _populate(cmd):
@@ -168,6 +194,7 @@ def _populate(cmd):
             detail = inputs.addTextBoxCommandInput(DETAIL_INPUT, '', '', 3, True)
         if inputs.itemById(REFRESH_INPUT) is None:
             _add_refresh_button(inputs)
+        _release_refresh_button(inputs)
 
         actions = []
         details = []
@@ -198,6 +225,13 @@ def _add_refresh_button(inputs):
     inputs.addBoolValueInput(REFRESH_INPUT, 'Refresh', False, ICON_FOLDER, False)
 
 
+def _release_refresh_button(inputs):
+    """A click leaves the button on. Turn it off while the dialog is being filled."""
+    button = adsk.core.BoolValueCommandInput.cast(inputs.itemById(REFRESH_INPUT))
+    if button is not None and button.value:
+        button.value = False
+
+
 def _load_scripts():
     try:
         scripts = _saved_scripts()
@@ -217,14 +251,12 @@ def _on_input_changed(args: adsk.core.InputChangedEventArgs):
     changed = args.input
     if changed.id == REFRESH_INPUT:
         button = adsk.core.BoolValueCommandInput.cast(changed)
-        if button is not None and not button.value:
+        # Rebuilding the list here deletes rows while Fusion is still handling
+        # the click, which freezes and then crashes. The value stays on until
+        # the deferred refresh turns it off, so the next click can run.
+        if button is None or not button.value:
             return
-        if button is not None:
-            try:
-                button.value = False
-            except Exception:
-                pass
-        _populate(args.inputs.command)
+        _schedule_refresh()
         return
     if changed.id == SCRIPT_INPUT or changed.id.startswith(SCRIPT_ROW_PREFIX):
         _show_selected_detail(args.inputs)
@@ -258,7 +290,7 @@ def _script_table(inputs):
 
 def _fill_script_list(inputs, table, labels):
     """Show every script as its own row. The highlighted row is the one Run uses."""
-    _remove_script_rows(inputs, table)
+    _remove_script_rows(table)
     for index, label in enumerate(labels):
         row = inputs.addTextBoxCommandInput(f'{SCRIPT_ROW_PREFIX}{index}', '', '', 1, True)
         row.text = label
@@ -267,20 +299,20 @@ def _fill_script_list(inputs, table, labels):
         table.selectedRow = 0
 
 
-def _remove_script_rows(inputs, table):
+def _remove_script_rows(table):
+    """Remove script rows with deleteRow, which also deletes their inputs.
+
+    deleteMe on an input that is still in the table, then table.clear(),
+    crashes Fusion. A guard count stops the loop if a row fails to delete.
+    """
     try:
         table.selectedRow = -1
     except Exception:
         pass
-    index = 0
-    while True:
-        row = inputs.itemById(f'{SCRIPT_ROW_PREFIX}{index}')
-        if row is None:
-            break
-        row.deleteMe()
-        index += 1
-    if table.rowCount:
-        table.clear()
+    guard = table.rowCount
+    while table.rowCount and guard:
+        table.deleteRow(table.rowCount - 1)
+        guard -= 1
 
 
 def _selected_action(inputs):
@@ -335,6 +367,46 @@ def _unique_name(saved, used_names):
     unique = f'{name} ({suffix})'
     used_names.add(unique)
     return unique
+
+
+def _schedule_refresh():
+    global _refresh_pending
+    with _pending_lock:
+        if _refresh_pending:
+            return
+        _refresh_pending = True
+    timer = threading.Timer(_REFRESH_DELAY, _fire_refresh_event)
+    timer.daemon = True
+    timer.start()
+
+
+def _fire_refresh_event():
+    global _refresh_pending
+    try:
+        app.fireCustomEvent(REFRESH_EVENT_ID, '')
+    except Exception:
+        with _pending_lock:
+            _refresh_pending = False
+        futil.log(f'Script Runner: could not refresh the script list:\n{traceback.format_exc()}')
+
+
+def _on_refresh_list(_args: adsk.core.CustomEventArgs):
+    """Rebuild the open dialog after the Refresh click has finished."""
+    global _refresh_pending
+    with _pending_lock:
+        _refresh_pending = False
+    cmd = _open_command
+    if cmd is None:
+        return
+    try:
+        active = ui.activeCommand or ''
+    except Exception:
+        active = ''
+    if active != LIST_CMD_ID:
+        futil.log(f'Script Runner: skipped refresh while "{active}" was active.')
+        return
+    futil.log('Script Runner: refreshing the script list.')
+    _populate(cmd)
 
 
 def _schedule_run(folder):

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { onEvent, request, waitForAdsk } from '../../connector/fusionBridge';
+import { onEvent, request, sendJsLog, waitForAdsk } from '../../connector/fusionBridge';
 import type {
   ActiveFileLocation,
   ActiveFilePayload,
@@ -10,6 +10,7 @@ import type {
   ReadyPayload,
   ReferencesPayload,
   SearchProgress,
+  SearchStartPayload,
 } from '../../types/types';
 import { errorMessage, newSearchId, sortNodes } from '../../utils/nodes';
 import { useToast } from '../common/Toast';
@@ -19,6 +20,8 @@ import { DetailPanel } from './DetailPanel';
 import { FileList, type FileSection } from './FileList';
 import { MoveDialog } from './MoveDialog';
 import { Toolbar } from './Toolbar';
+
+const READY_TIMEOUT_MS = 30000;
 
 type DetailState = {
   fileId: string;
@@ -82,8 +85,19 @@ export function Explorer() {
     if (hubCrumb) setActiveHubId(hubCrumb.id);
   }, []);
 
+  const applySearchProgress = useCallback((data: SearchProgress) => {
+    if (data.searchId !== searchRef.current) return;
+    setProjectMatches((current) => sortNodes(dedupe(data.replace ? data.matches : [...current, ...data.matches])));
+    setSearchTruncated(data.truncated);
+    setIndexing(Boolean(data.indexing) && !data.done);
+    if (data.done) {
+      setSearching(false);
+      setIndexing(false);
+    }
+  }, []);
+
   const load = useCallback(
-    async (target: LocationTarget, options?: { selectId?: string; keepQuery?: boolean }) => {
+    async (target: LocationTarget, options?: { selectId?: string; keepQuery?: boolean; refresh?: boolean }) => {
       const seq = ++loadSeq.current;
       setLoading(true);
       setError('');
@@ -92,7 +106,7 @@ export function Explorer() {
         setActiveQuery('');
       }
       try {
-        const listing = await request<Listing>('folder:list', target);
+        const listing = await request<Listing>('folder:list', { ...target, refresh: options?.refresh });
         if (seq !== loadSeq.current) return;
         applyListing(listing);
         setSelectedId(options?.selectId ?? '');
@@ -115,7 +129,15 @@ export function Explorer() {
     void (async () => {
       await waitForAdsk();
       try {
-        const ready = await request<ReadyPayload>('ready');
+        const ready = await Promise.race([
+          request<ReadyPayload>('ready'),
+          new Promise<never>((_, reject) => {
+            window.setTimeout(
+              () => reject(new Error('Fusion did not answer. Check the Text Commands window, then retry.')),
+              READY_TIMEOUT_MS
+            );
+          }),
+        ]);
         if (cancelled) return;
         setHubs(ready.hubs);
         setActiveHubId(ready.activeHubId);
@@ -127,6 +149,7 @@ export function Explorer() {
           setError(ready.listingError || 'No Fusion hub is available.');
         }
       } catch (err) {
+        sendJsLog('error', 'Palette ready failed', { message: errorMessage(err, 'unknown') });
         if (!cancelled) setError(errorMessage(err, 'Could not reach Fusion.'));
       } finally {
         if (!cancelled) {
@@ -146,15 +169,7 @@ export function Explorer() {
     });
     const offSearch = onEvent('searchProgress', (raw) => {
       try {
-        const data = JSON.parse(raw) as SearchProgress;
-        if (data.searchId !== searchRef.current) return;
-        setProjectMatches((current) => sortNodes(dedupe(data.replace ? data.matches : [...current, ...data.matches])));
-        setSearchTruncated(data.truncated);
-        setIndexing(Boolean(data.indexing) && !data.done);
-        if (data.done) {
-          setSearching(false);
-          setIndexing(false);
-        }
+        applySearchProgress(JSON.parse(raw) as SearchProgress);
       } catch {
         // Ignore a malformed push from the add-in.
       }
@@ -165,7 +180,7 @@ export function Explorer() {
       offActive();
       offSearch();
     };
-  }, [applyListing, showToast]);
+  }, [applyListing, applySearchProgress, showToast]);
 
   const projectId = crumbs.find((crumb) => crumb.kind === 'project')?.id ?? '';
 
@@ -188,12 +203,16 @@ export function Explorer() {
     setSearching(true);
     const searchId = newSearchId();
     searchRef.current = searchId;
-    void request('search:start', { searchId, query: needle, projectId }).catch((err) => {
-      if (searchRef.current !== searchId) return;
-      setSearching(false);
-      showToast(errorMessage(err, 'Search failed.'), 'error');
-    });
-  }, [projectId, activeQuery, searchEpoch, showToast]);
+    void request<SearchStartPayload>('search:start', { searchId, query: needle, projectId })
+      .then((result) => {
+        if (result?.progress) applySearchProgress(result.progress);
+      })
+      .catch((err) => {
+        if (searchRef.current !== searchId) return;
+        setSearching(false);
+        showToast(errorMessage(err, 'Search failed.'), 'error');
+      });
+  }, [projectId, activeQuery, searchEpoch, applySearchProgress, showToast]);
 
   const needle = activeQuery.trim().toLowerCase();
   const localRows = needle ? children.filter((node) => node.name.toLowerCase().includes(needle)) : children;
@@ -519,7 +538,7 @@ export function Explorer() {
           setCreating(true);
         }}
         onRefresh={() => {
-          if (location) void load(location, { selectId: selectedId, keepQuery: true });
+          if (location) void load(location, { selectId: selectedId, keepQuery: true, refresh: true });
         }}
         onRevealActive={() => void revealActive()}
       />
@@ -618,6 +637,7 @@ export function Explorer() {
       {confirmNode && (
         <ConfirmDialog
           node={confirmNode}
+          usedByCount={refCache.current.get(confirmNode.id)?.parents.length ?? 0}
           busy={confirmBusy}
           onCancel={() => setConfirmNode(null)}
           onConfirm={() => void confirmDelete()}
