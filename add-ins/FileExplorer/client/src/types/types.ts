@@ -43,6 +43,8 @@ export type SearchProgress = {
   done: boolean;
   truncated: boolean;
   cancelled: boolean;
+  replace?: boolean;
+  indexing?: boolean;
 };
 
 export type ActiveFilePayload = {

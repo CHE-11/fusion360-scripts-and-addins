@@ -4,7 +4,7 @@ File Explorer is a Fusion 360 add-in for browsing hub projects and files. It doc
 
 The palette shows the active hub, project, and folder. From a folder you can:
 
-- Search this project with the Search button or Enter. The open folder is listed first, then the rest of the project
+- Search this project with the Search button or Enter. The open folder is listed first, then matches from a local project index
 - Open a design or drawing, or switch to it if it is already open
 - Insert a Fusion design into the open design as a linked component. It has to be in the same project, and it is placed at the origin of the component you are editing
 - Rename a file or folder
@@ -13,7 +13,7 @@ The palette shows the active hub, project, and folder. From a folder you can:
 - Delete a file or an empty folder, with a warning when other designs use the file
 - Show where a file is used, and which files it uses
 
-Folders load one level at a time. Project search walks the project in small batches so Fusion stays responsive, and it stops after about 3000 files.
+Folders load one level at a time. The add-in indexes the open project in the background, one folder at a time, and saves that index on disk. Search filters the index, so a later search does not walk the cloud again. The first index can still take a while on a large project, and it stops after about 20,000 files.
 
 ## Install
 

@@ -253,6 +253,7 @@ const hubs: MockHub[] = [
 let activeFileId = 'file-bracket';
 let activeSearchId = '';
 const searchTimers: number[] = [];
+const projectCatalog = new Map<string, ExplorerNode[]>();
 
 function clearSearchTimers() {
   while (searchTimers.length) {
@@ -426,31 +427,54 @@ function startMockSearch(searchId: string, projectId: string, query: string) {
   activeSearchId = searchId;
   const found = findProject(projectId);
   if (!found) mockFail('That project is not loaded. Refresh and open it again.');
+  const needle = query.toLowerCase();
+  const cached = projectCatalog.get(projectId);
+  if (cached) {
+    dispatchEvent(
+      'searchProgress',
+      JSON.stringify({
+        searchId,
+        matches: cached.filter((node) => node.name.toLowerCase().includes(needle)),
+        scanned: cached.length,
+        done: true,
+        truncated: false,
+        cancelled: false,
+        replace: true,
+        indexing: false,
+      })
+    );
+    activeSearchId = '';
+    return;
+  }
+
   const folders: MockFolder[] = [];
   walkFolders(found.project.root, (item) => folders.push(item));
+  const catalog: ExplorerNode[] = [];
   let index = 0;
   let scanned = 0;
-  const needle = query.toLowerCase();
 
   const step = () => {
     if (activeSearchId !== searchId) return;
     const current = folders[index];
     index += 1;
     const matches: ExplorerNode[] = [];
-    if (current && current !== found.project.root && current.name.toLowerCase().includes(needle)) {
+    if (current && current !== found.project.root) {
       const parent = findFolder(current.id);
-      matches.push(folderNode(current, found.project, parent?.parent?.id ?? ''));
+      const folder = folderNode(current, found.project, parent?.parent?.id ?? '');
+      catalog.push(folder);
+      if (current.name.toLowerCase().includes(needle)) matches.push(folder);
     }
     if (current) {
       current.files.forEach((item) => {
         scanned += 1;
-        if (item.name.toLowerCase().includes(needle)) {
-          matches.push(fileNode(item, found.project, current.id));
-        }
+        const file = fileNode(item, found.project, current.id);
+        catalog.push(file);
+        if (item.name.toLowerCase().includes(needle)) matches.push(file);
       });
     }
-    const truncated = scanned >= 3000 && index < folders.length;
+    const truncated = scanned >= 20000 && index < folders.length;
     const done = truncated || index >= folders.length;
+    if (done) projectCatalog.set(projectId, catalog);
     dispatchEvent(
       'searchProgress',
       JSON.stringify({
@@ -460,6 +484,8 @@ function startMockSearch(searchId: string, projectId: string, query: string) {
         done,
         truncated,
         cancelled: false,
+        replace: false,
+        indexing: !done,
       })
     );
     if (!done) {
@@ -531,6 +557,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
   }
 
   if (action === 'item:rename') {
+    projectCatalog.clear();
     const name = cleanName(data.name);
     const id = String(data.id || '');
     if (data.kind === 'file') {
@@ -550,6 +577,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
   }
 
   if (action === 'item:delete') {
+    projectCatalog.clear();
     const id = String(data.id || '');
     if (data.kind === 'file') {
       const found = findFile(id);
@@ -581,6 +609,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
   }
 
   if (action === 'folder:create') {
+    projectCatalog.clear();
     const name = cleanName(data.name);
     const parentKind = String(data.parentKind || '');
     const parentId = String(data.parentId || '');
@@ -604,6 +633,7 @@ async function mockRequest<T>(action: string, payload?: unknown): Promise<T> {
   }
 
   if (action === 'file:move') {
+    projectCatalog.clear();
     const found = findFile(String(data.id || ''));
     const target = findFolder(String(data.targetFolderId || ''));
     if (!found || !target) mockFail('That item is not loaded. Refresh and open it again.');

@@ -7,8 +7,6 @@ for %%P in (
   CONstrainer
   FileExplorer
   ProParams
-  @REM RestartAddIns - Doesnt have to be built - python only
-  @REM ScriptRunner - Doesnt have to be built - python only
 ) do (
   echo.
   if exist "%ROOT%\add-ins\%%P\client\package.json" (

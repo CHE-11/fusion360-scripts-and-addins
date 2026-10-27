@@ -41,6 +41,7 @@ export function Explorer() {
   const [activeQuery, setActiveQuery] = useState('');
   const [projectMatches, setProjectMatches] = useState<ExplorerNode[]>([]);
   const [searching, setSearching] = useState(false);
+  const [indexing, setIndexing] = useState(false);
   const [searchTruncated, setSearchTruncated] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [renameId, setRenameId] = useState('');
@@ -147,9 +148,13 @@ export function Explorer() {
       try {
         const data = JSON.parse(raw) as SearchProgress;
         if (data.searchId !== searchRef.current) return;
-        setProjectMatches((current) => sortNodes(dedupe([...current, ...data.matches])));
+        setProjectMatches((current) => sortNodes(dedupe(data.replace ? data.matches : [...current, ...data.matches])));
         setSearchTruncated(data.truncated);
-        if (data.done) setSearching(false);
+        setIndexing(Boolean(data.indexing) && !data.done);
+        if (data.done) {
+          setSearching(false);
+          setIndexing(false);
+        }
       } catch {
         // Ignore a malformed push from the add-in.
       }
@@ -174,6 +179,7 @@ export function Explorer() {
     }
     setProjectMatches([]);
     setSearchTruncated(false);
+    setIndexing(false);
     const needle = activeQuery.trim();
     if (!needle || !projectId) {
       setSearching(false);
@@ -200,7 +206,7 @@ export function Explorer() {
         { id: 'here', title: 'In this folder', rows: localRows },
         {
           id: 'project',
-          title: searching ? 'In this project' : searchTruncated ? 'In this project, partial' : 'In this project',
+          title: indexing ? 'In this project, indexing' : searching ? 'In this project' : searchTruncated ? 'In this project, partial' : 'In this project',
           rows: otherRows,
         },
       ]
@@ -470,9 +476,12 @@ export function Explorer() {
   const title = location?.name || 'File Explorer';
   let emptyTitle = 'Empty folder';
   let emptyMessage = 'This folder does not have any files yet.';
-  if (needle && searching) {
+  if (needle && indexing) {
+    emptyTitle = 'Indexing';
+    emptyMessage = 'Reading this project in the background. Matches show up as each folder is indexed.';
+  } else if (needle && searching) {
     emptyTitle = 'Searching';
-    emptyMessage = 'Looking through the rest of the project.';
+    emptyMessage = 'Looking through the project index.';
   } else if (needle) {
     emptyTitle = 'No matches';
     emptyMessage = `Nothing in this project is named “${activeQuery.trim()}”.`;
@@ -484,12 +493,6 @@ export function Explorer() {
   return (
     <div id="fx-app">
       {loading && <div id="fx-progress" className="fx-progress" />}
-      <header id="fx-header">
-        <div id="fx-header-copy">
-          <p id="fx-kicker">File Explorer</p>
-          <h1 id="fx-title">{title}</h1>
-        </div>
-      </header>
       <Toolbar
         hubs={hubs}
         activeHubId={activeHubId}
@@ -607,8 +610,9 @@ export function Explorer() {
       {!detailFile && location && (
         <footer id="fx-hints">
           <span id="fx-hint-keys">Enter open · F2 rename · Del delete · Backspace up</span>
-          {searching && <span id="fx-hint-search">Searching…</span>}
-          {searchTruncated && !searching && <span id="fx-hint-truncated">Search stopped early</span>}
+          {indexing && <span id="fx-hint-search">Indexing project…</span>}
+          {searching && !indexing && <span id="fx-hint-search">Searching…</span>}
+          {searchTruncated && !indexing && <span id="fx-hint-truncated">Index is partial</span>}
         </footer>
       )}
       {confirmNode && (
@@ -639,12 +643,7 @@ export function Explorer() {
 }
 
 function dedupe(nodes: ExplorerNode[]): ExplorerNode[] {
-  const seen = new Set<string>();
-  const unique: ExplorerNode[] = [];
-  nodes.forEach((node) => {
-    if (seen.has(node.id)) return;
-    seen.add(node.id);
-    unique.push(node);
-  });
-  return unique;
+  const byId = new Map<string, ExplorerNode>();
+  nodes.forEach((node) => byId.set(node.id, node));
+  return Array.from(byId.values());
 }

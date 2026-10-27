@@ -172,14 +172,18 @@ def palette_incoming(html_args: adsk.core.HTMLEventArgs):
             message_data = json.loads(html_args.data)
         except Exception:
             message_data = html_args.data
+    browser.enter_request()
     try:
-        html_args.returnData = route_message(html_args.action, message_data)
-    except ValueError as exc:
-        futil.log(f"Rejected '{html_args.action}': {exc}")
-        html_args.returnData = _err(exc)
-    except Exception:
-        futil.log(f"Error handling '{html_args.action}': {traceback.format_exc()}")
-        html_args.returnData = _err('Something went wrong in Fusion. Details are in the Text Commands window.')
+        try:
+            html_args.returnData = route_message(html_args.action, message_data)
+        except ValueError as exc:
+            futil.log(f"Rejected '{html_args.action}': {exc}")
+            html_args.returnData = _err(exc)
+        except Exception:
+            futil.log(f"Error handling '{html_args.action}': {traceback.format_exc()}")
+            html_args.returnData = _err('Something went wrong in Fusion. Details are in the Text Commands window.')
+    finally:
+        browser.leave_request()
 
 
 def route_message(action, data):
