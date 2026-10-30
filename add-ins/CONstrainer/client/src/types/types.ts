@@ -1,11 +1,11 @@
-export type TabId = 'sketches' | 'joints' | 'constraints' | 'help' | 'settings';
+export type TabId = 'sketches' | 'constraints' | 'help';
 
 export type DesignIntent = 'part' | 'assembly' | 'hybrid' | 'none';
 
 export type DocumentContext = {
   doc: string;
   intent: DesignIntent;
-  jointsAllowed: boolean;
+  assemblyAllowed: boolean;
 };
 
 export type SketchEntityRef = {
@@ -59,86 +59,14 @@ export type SketchSelection = {
   error: string | null;
 };
 
-export type JointMotion = 'rigid' | 'revolute' | 'slider' | 'cylindrical' | 'pinSlot' | 'planar' | 'ball';
+export type FocusKind = 'planarFace' | 'face' | 'curve' | 'point' | 'jointOrigin' | 'body' | 'component';
 
-export type ValueKind = 'none' | 'angle' | 'distance';
-
-export type JointKind = 'joint' | 'asBuilt';
-
-export type JointInfo = {
-  token: string;
-  name: string;
-  kind: JointKind;
-  warning: string;
-  motion: string;
-  motionLabel: string;
-  sideOne: string;
-  sideTwo: string;
-  isAsBuilt: boolean;
-  isSuppressed: boolean;
-  isLightBulbOn: boolean;
-  isVisible: boolean;
-  valueLabel: string;
-  component: string;
-  componentToken: string;
-};
-
-export type JointList = {
-  joints: JointInfo[];
-  intent: DesignIntent;
-  jointsAllowed: boolean;
-};
-
-export type JointGeometryRef = {
+export type SelectionFocus = {
   label: string;
-  token: string;
-  kind: string;
-  occurrenceToken: string;
-  occurrenceName: string;
-};
-
-export type JointFocusKind = 'planarFace' | 'face' | 'curve' | 'point' | 'jointOrigin' | 'body' | 'component';
-
-export type JointFocus = {
-  label: string;
-  kind: JointFocusKind;
+  kind: FocusKind;
   token: string;
   occurrenceName: string;
 };
-
-export type JointRelated = {
-  direct: JointInfo[];
-  component: JointInfo[];
-};
-
-export type JointOccurrenceRef = {
-  name: string;
-  token: string;
-};
-
-export type JointMotionOption = {
-  type: JointMotion;
-  label: string;
-  valueKind: ValueKind;
-};
-
-export type JointSelection = {
-  geometries: JointGeometryRef[];
-  occurrences: JointOccurrenceRef[];
-  focus: JointFocus | null;
-  related: JointRelated;
-  error: string | null;
-};
-
-export const JOINT_MOTIONS: JointMotionOption[] = [
-  { type: 'rigid', label: 'Rigid', valueKind: 'none' },
-  { type: 'revolute', label: 'Revolute', valueKind: 'angle' },
-  { type: 'slider', label: 'Slider', valueKind: 'distance' },
-  { type: 'cylindrical', label: 'Cylindrical', valueKind: 'angle' },
-  { type: 'pinSlot', label: 'Pin-slot', valueKind: 'distance' },
-  { type: 'planar', label: 'Planar', valueKind: 'angle' },
-  { type: 'ball', label: 'Ball', valueKind: 'none' },
-];
 
 export type ConstraintRelationshipType = 'mate' | 'angle';
 
@@ -152,6 +80,10 @@ export type ConstraintRelationship = {
   parameterName: string;
   entityOne: string;
   entityTwo: string;
+  entityOneGeometry: string;
+  entityTwoGeometry: string;
+  entityOneComponent: string;
+  entityTwoComponent: string;
 };
 
 export type ConstraintHealth = 'ok' | 'warning' | 'error';
@@ -179,7 +111,7 @@ export type ConstraintList = {
 };
 
 export type ConstraintSelection = {
-  focus: JointFocus | null;
+  focus: SelectionFocus | null;
   direct: AssemblyConstraintInfo[];
   component: AssemblyConstraintInfo[];
 };
@@ -194,7 +126,6 @@ export type ReadyPayload = DocumentContext;
 
 export type SelectionChangedPayload = {
   sketch: SketchSelection;
-  joint: JointSelection;
   constraint?: ConstraintSelection;
   document?: DocumentContext;
 };
@@ -204,13 +135,5 @@ export const EMPTY_SKETCH_SELECTION: SketchSelection = {
   sketchToken: '',
   entities: [],
   compatible: [],
-  error: null,
-};
-
-export const EMPTY_JOINT_SELECTION: JointSelection = {
-  geometries: [],
-  occurrences: [],
-  focus: null,
-  related: { direct: [], component: [] },
   error: null,
 };

@@ -6,8 +6,8 @@ import type {
   AssemblyConstraintInfo,
   ConstraintList,
   ConstraintSelection,
-  JointFocus,
-  JointFocusKind,
+  FocusKind,
+  SelectionFocus,
 } from '../../types/types';
 import { EmptyState } from '../common/EmptyState';
 import { useToast } from '../common/Toast';
@@ -27,12 +27,12 @@ type ConstraintGroup = {
 };
 
 type FocusView = {
-  focus: JointFocus;
+  focus: SelectionFocus;
   direct: AssemblyConstraintInfo[];
   component: AssemblyConstraintInfo[];
 };
 
-const FOCUS_NOUNS: Record<JointFocusKind, string> = {
+const FOCUS_NOUNS: Record<FocusKind, string> = {
   planarFace: 'face',
   face: 'face',
   curve: 'edge',
@@ -70,7 +70,6 @@ export function AssemblyConstraintsTab({ booted, active, revision, selection }: 
   const [query, setQuery] = useState('');
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState('');
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [focusView, setFocusView] = useState<FocusView | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -252,10 +251,8 @@ export function AssemblyConstraintsTab({ booted, active, revision, selection }: 
       key={constraint.token}
       constraint={constraint}
       busy={busy === constraint.token}
-      expanded={!!expanded[constraint.token]}
       editing={editing === constraint.token}
       draft={draft}
-      onToggleExpanded={() => setExpanded((current) => ({ ...current, [constraint.token]: !current[constraint.token] }))}
       onDraftChange={setDraft}
       onStartRename={() => {
         setEditing(constraint.token);
@@ -276,20 +273,6 @@ export function AssemblyConstraintsTab({ booted, active, revision, selection }: 
         void run(constraint.token, 'constraint:setSuppressed', { suppressed: !constraint.isSuppressed }, 'Could not change suppression.')
       }
       onDelete={() => void removeConstraint(constraint)}
-      onSetValue={(index, expression) =>
-        void run(constraint.token, 'constraint:setValue', { index, expression }, 'Could not change that value.')
-      }
-      onSetFlipped={(index, flipped) =>
-        void run(constraint.token, 'constraint:setFlipped', { index, flipped }, 'Could not flip that relationship.')
-      }
-      onSetRelationshipSuppressed={(index, suppressed) =>
-        void run(
-          constraint.token,
-          'constraint:setRelationshipSuppressed',
-          { index, suppressed },
-          'Could not change suppression for that relationship.'
-        )
-      }
     />
   );
 

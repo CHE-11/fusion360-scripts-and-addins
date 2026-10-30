@@ -156,7 +156,6 @@ body {
   flex: 0 0 auto;
 }
 
-.cs_tabSettings,
 .cs_tabHelp {
   display: inline-flex;
   align-items: center;
@@ -443,16 +442,14 @@ body {
   text-transform: uppercase;
 }
 
-.cs_sketch,
-.cs_joint {
+.cs_sketch {
   border: 1px solid var(--cs-border);
   border-radius: var(--cs-radius);
   background: var(--cs-surface);
   margin-bottom: 6px;
 }
 
-.cs_sketchHead,
-.cs_joint {
+.cs_sketchHead {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -463,8 +460,7 @@ body {
 }
 
 .cs_sketchToggle,
-.cs_constraintMain,
-.cs_jointSelect {
+.cs_constraintMain {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -480,23 +476,13 @@ body {
 }
 
 .cs_sketchToggle:hover,
-.cs_constraintMain:hover,
-.cs_jointSelect:hover {
+.cs_constraintMain:hover {
   background: rgba(255, 255, 255, 0.03);
 }
 
 .cs_sketchName,
-.cs_jointName,
 .cs_constraintLabel {
   font-weight: 650;
-}
-
-.cs_jointName {
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cs_sketchName,
@@ -562,21 +548,27 @@ body {
 }
 
 .cs_constraintMain {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 6px 8px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+}
+
+.cs_constraintMain .cs_constraintLabel {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cs_constraint .cs_iconBtn {
+  width: 24px;
+  height: 24px;
 }
 
 .cs_constraintEmpty {
   padding: 6px 8px 8px;
 }
 
-.cs_joint {
-  padding: 4px 4px 4px 0;
-}
-
-.cs_jointHidden {
+.cs_constraintHidden {
   opacity: 0.55;
 }
 
@@ -584,7 +576,7 @@ body {
   border: 1px solid var(--cs-border);
   border-radius: var(--cs-radius);
   background: var(--cs-surface);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .cs_constraintCard:hover {
@@ -592,47 +584,82 @@ body {
 }
 
 .cs_constraintHead {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name sides actions'
+    'name sides badges';
   align-items: center;
-  gap: 2px;
-  padding: 4px;
+  column-gap: 6px;
+  padding: 2px 4px 4px 0;
 }
 
-.cs_relationships {
-  list-style: none;
-  margin: 0;
-  padding: 0 4px 4px 32px;
+.cs_constraintHead .cs_iconBtn {
+  width: 24px;
+  height: 24px;
 }
 
-.cs_relationship {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 0;
-  border-top: 1px solid var(--cs-border);
+.cs_iconBtnActive {
+  background: var(--cs-surface-3);
+  color: var(--cs-warn);
 }
 
-.cs_relationshipInfo {
+.cs_constraintName {
+  grid-area: name;
+  align-self: stretch;
+  min-width: 32px;
+  max-width: 96px;
+  padding: 0 6px;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-right: 1px solid var(--cs-border);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  text-align: center;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cs_constraintNameInput {
+  grid-column: name-start / sides-end;
+  grid-row: 1 / span 2;
+  align-self: center;
+  min-width: 0;
+  height: 24px;
+}
+
+.cs_constraintActions {
+  grid-area: actions;
+  justify-self: end;
+}
+
+.cs_constraintSides {
+  grid-area: sides;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
   min-width: 0;
+  padding: 0 2px;
+  cursor: pointer;
 }
 
-.cs_relationshipType {
-  margin-left: 6px;
-  vertical-align: 1px;
+.cs_constraintSide {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.cs_relationshipValue {
-  flex: 0 0 88px;
-  width: 88px;
-}
-
-.cs_relationshipNote {
-  padding: 6px 0;
-  border-top: 1px solid var(--cs-border);
+.cs_constraintBadges {
+  grid-area: badges;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 .cs_badgeError {
@@ -640,29 +667,8 @@ body {
   color: var(--cs-danger);
 }
 
-.cs_jointSuppressed .cs_jointName {
+.cs_constraintSuppressed .cs_constraintName {
   text-decoration: line-through;
-}
-
-.cs_jointMain {
-  flex: 1;
-  min-width: 0;
-}
-
-.cs_jointSelect {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-}
-
-.cs_jointMeta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
 }
 
 .cs_nameInput {
@@ -760,8 +766,7 @@ body {
 .cs_helpLead,
 .cs_helpText,
 .cs_helpCardBody,
-.cs_helpItemBody,
-.cs_helpMotionBody {
+.cs_helpItemBody {
   margin: 6px 0 0;
   color: var(--cs-text-dim);
   line-height: 1.45;
@@ -826,34 +831,13 @@ body {
   font-size: 14px;
 }
 
-.cs_helpList,
-.cs_helpMotions {
+.cs_helpList {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.cs_helpMotions {
-  gap: 0;
-}
-
-.cs_helpMotion {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 8px;
-  padding: 6px 0;
-  border-top: 1px solid var(--cs-border);
-}
-
-.cs_helpMotionName {
-  font-weight: 650;
-}
-
-.cs_helpMotionBody {
-  margin: 0;
 }
 
 .cs_toastCopy {

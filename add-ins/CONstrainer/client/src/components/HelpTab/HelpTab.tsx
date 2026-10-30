@@ -1,40 +1,14 @@
-type MotionRow = {
-  id: string;
-  name: string;
-  body: string;
-};
-
 type GuideItem = {
   id: string;
   title: string;
   body: string;
 };
 
-const MOTIONS: MotionRow[] = [
-  { id: 'rigid', name: 'Rigid', body: 'Locked. The two components cannot move relative to each other.' },
-  { id: 'revolute', name: 'Revolute', body: 'Rotates about one axis, like a hinge. Can take an angle.' },
-  { id: 'slider', name: 'Slider', body: 'Slides along one axis. Can take a distance.' },
-  { id: 'cylindrical', name: 'Cylindrical', body: 'Rotates and slides on the same axis.' },
-  { id: 'pinSlot', name: 'Pin-slot', body: 'Rotates about one axis and slides along a different axis.' },
-  { id: 'planar', name: 'Planar', body: 'Slides across a plane and rotates about the axis normal to that plane.' },
-  { id: 'ball', name: 'Ball', body: 'Rotates freely about a point, like a ball joint.' },
-];
-
 const CHOICES: GuideItem[] = [
   {
     id: 'sketch',
     title: 'A line, point, or arc inside a sketch',
     body: 'Use a sketch constraint. Horizontal, coincident, tangent, and the rest only exist inside that sketch.',
-  },
-  {
-    id: 'motion',
-    title: 'A hinge, a slide, or two parts locked together',
-    body: 'Use a joint and pick the motion. Revolute for a hinge, slider for a drawer, rigid when nothing should move.',
-  },
-  {
-    id: 'asBuilt',
-    title: 'Parts that are already in the right place',
-    body: 'Use an as-built joint. It records the motion and leaves the components where they are.',
   },
   {
     id: 'align',
@@ -60,10 +34,10 @@ export function HelpTab({ active }: Props) {
       <div id="cs_helpScroll" className="cs_help">
         <header id="cs_helpIntro" className="cs_helpIntro">
           <h2 id="cs_helpTitle" className="cs_helpTitle">
-            Three different relationships
+            Two different relationships
           </h2>
           <p id="cs_helpLead" className="cs_helpLead">
-            Fusion solves sketch geometry, component motion, and component alignment separately. CONstrainer keeps each one on its own tab.
+            Fusion solves sketch geometry and component alignment separately. CONstrainer keeps each one on its own tab.
           </p>
         </header>
 
@@ -77,17 +51,6 @@ export function HelpTab({ active }: Props) {
             </span>
             <span id="cs_helpCardBody_sketches" className="cs_helpCardBody">
               How lines, points, and curves sit inside one sketch.
-            </span>
-          </button>
-          <button id="cs_helpCard_joints" className="cs_helpCard" type="button" onClick={() => showTopic('cs_helpTopic_joints')}>
-            <span id="cs_helpCardKicker_joints" className="cs_helpKicker">
-              Assembly and hybrid
-            </span>
-            <span id="cs_helpCardTitle_joints" className="cs_helpCardTitle">
-              Joints
-            </span>
-            <span id="cs_helpCardBody_joints" className="cs_helpCardBody">
-              Which motions are still allowed between two components.
             </span>
           </button>
           <button id="cs_helpCard_constraints" className="cs_helpCard" type="button" onClick={() => showTopic('cs_helpTopic_constraints')}>
@@ -142,36 +105,6 @@ export function HelpTab({ active }: Props) {
           </p>
         </section>
 
-        <section id="cs_helpTopic_joints" className="cs_helpSection">
-          <p id="cs_helpTopicKicker_joints" className="cs_helpKicker">
-            Joints tab · assembly and hybrid
-          </p>
-          <h2 id="cs_helpTopicTitle_joints" className="cs_helpSectionTitle">
-            Joints
-          </h2>
-          <p id="cs_helpTopicLead_joints" className="cs_helpText">
-            A joint connects two components and names the motion that remains. You choose two pieces of geometry, or joint origins, and a motion type. Fusion removes every other degree of freedom.
-          </p>
-          <ul id="cs_helpMotions" className="cs_helpMotions">
-            {MOTIONS.map((motion) => (
-              <li id={`cs_helpMotion_${motion.id}`} key={motion.id} className="cs_helpMotion">
-                <span id={`cs_helpMotionName_${motion.id}`} className="cs_helpMotionName">
-                  {motion.name}
-                </span>
-                <span id={`cs_helpMotionBody_${motion.id}`} className="cs_helpMotionBody">
-                  {motion.body}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p id="cs_helpAsBuilt" className="cs_helpText">
-            An as-built joint uses the same motion types. The components stay where they already are; the joint only records how they may move from there. Create one when the two geometries are on different components.
-          </p>
-          <p id="cs_helpTopicHere_joints" className="cs_helpText">
-            In this palette, set First and Second from the canvas selection, pick a motion, then create a joint or an as-built joint. Select a face, edge, point, body, or component to list the joints that use it. Show, hide, rename, suppress, or select a joint from its row.
-          </p>
-        </section>
-
         <section id="cs_helpTopic_constraints" className="cs_helpSection">
           <p id="cs_helpTopicKicker_constraints" className="cs_helpKicker">
             Assembly constraints tab · assembly and hybrid
@@ -180,7 +113,7 @@ export function HelpTab({ active }: Props) {
             Assembly constraints
           </h2>
           <p id="cs_helpTopicLead_constraints" className="cs_helpText">
-            An assembly constraint is a geometric relationship from Assemble → Constrain Components. You describe how two faces, edges, or points relate. Fusion works out the motion from those relationships. You do not pick rigid, revolute, slider, or another joint type.
+            An assembly constraint is a geometric relationship from Assemble → Constrain Components. You describe how two faces, edges, or points relate. Fusion works out the motion from those relationships, so you do not pick a motion type.
           </p>
           <ul id="cs_helpRelationships" className="cs_helpList">
             <li id="cs_helpRel_mate" className="cs_helpItem">
@@ -201,13 +134,13 @@ export function HelpTab({ active }: Props) {
             </li>
           </ul>
           <p id="cs_helpTopicStack_constraints" className="cs_helpText">
-            One constraint can hold several relationships. Flip reverses the side a relationship uses. Suppress turns one relationship off and leaves the rest of the constraint in place. A warning or error on the card is Fusion's health message for that constraint.
+            One constraint can hold several relationships; the card shows a count when it does. A warning or error on the card is Fusion's health message for that constraint, and hovering it shows the message.
           </p>
           <p id="cs_helpTopicStore_constraints" className="cs_helpText">
-            Fusion stores these apart from joints, so an Align never appears in the Joints list. This is the same idea as a mate in SolidWorks or Inventor.
+            This is the same idea as a mate in SolidWorks or Inventor.
           </p>
           <p id="cs_helpTopicHere_constraints" className="cs_helpText">
-            In this palette, expand a constraint to edit each offset or angle, flip it, or suppress that relationship. Hover a row to highlight that constraint in the canvas and timeline. The target button keeps the highlight on. Rename, show, hide, suppress, or delete the whole constraint. Select a face, edge, point, body, or component to list the constraints that use it. Create new ones in Fusion with Constrain Components.
+            In this palette, hover a row to highlight the faces and edges that constraint uses in the canvas. The target button keeps the highlight on. Rename, show, hide, suppress, or delete the whole constraint. Select a face, edge, point, body, or component to list the constraints that use it. Create new ones in Fusion with Constrain Components.
           </p>
         </section>
 
@@ -222,6 +155,14 @@ export function HelpTab({ active }: Props) {
               </p>
               <p id="cs_helpLimitBody_dimensions" className="cs_helpItemBody">
                 Lengths and angles on sketch geometry stay in ProParams.
+              </p>
+            </li>
+            <li id="cs_helpLimit_joints" className="cs_helpItem">
+              <p id="cs_helpLimitTitle_joints" className="cs_helpItemTitle">
+                Joints and as-built joints
+              </p>
+              <p id="cs_helpLimitBody_joints" className="cs_helpItemBody">
+                Create and edit joints with Fusion's Joint and As-built Joint commands.
               </p>
             </li>
             <li id="cs_helpLimit_groups" className="cs_helpItem">

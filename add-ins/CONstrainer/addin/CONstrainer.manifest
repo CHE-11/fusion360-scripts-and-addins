@@ -4,7 +4,7 @@
 	"id":	"e7a4c2b1-9f30-4c6e-8d55-1a6b3e8f47c2",
 	"author":	"Connor E",
 	"description":	{
-		"":	"Create and manage sketch constraints and assembly joints"
+		"":	"Create and manage sketch constraints and assembly constraints"
 	},
 	"version":	"1.0.0",
 	"runOnStartup":	true,

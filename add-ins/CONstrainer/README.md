@@ -1,15 +1,14 @@
 # CONstrainer
 
-CONstrainer is a Fusion 360 add-in that creates and manages sketch geometric constraints and assembly joints.
+CONstrainer is a Fusion 360 add-in that creates and manages sketch geometric constraints and assembly constraints.
 
-The palette has four tabs:
+The palette has three tabs:
 
 - **Sketches** lists every sketch in the active design, grouped by component. Each sketch shows whether it is fully constrained and lists its geometric constraints. Select geometry in the canvas, click **Use selection**, and apply a constraint that fits that geometry. Click a constraint to select its geometry, or delete it when Fusion allows it.
-- **Joints** is shown for assembly and hybrid designs. It lists joints and as-built joints under the component that owns them. Show or hide a joint, suppress it, rename it, or select it. Select a face, edge, point, body, or component in the canvas to list the joints that use it and the other joints on its component. To create a joint, set the **First** and **Second** geometry from the canvas selection, pick a rigid, revolute, slider, cylindrical, pin-slot, planar, or ball type, and click **Create joint**. **Create as-built** is enabled when the two geometries are on different components.
-- **Assembly constraints** is shown for assembly and hybrid designs. It lists the constraints made with **Assemble → Constrain Components** (Align, Angle, and so on). Rename, show or hide, suppress, or delete a constraint. Hover a constraint to highlight it in the canvas and timeline; the highlight goes away when the pointer leaves. The target button keeps that highlight on. Expand one to edit each relationship's offset or angle, flip its direction, or suppress just that relationship. Select a face, edge, point, body, or component to list the constraints that use it. Fusion's add-in API for assembly constraints is still a preview, so new constraints are created in Fusion, not here.
-- **Help** explains sketch constraints, joints, and assembly constraints, and when to use each one. It stays available in part designs.
+- **Assembly constraints** is shown for assembly and hybrid designs. It lists the constraints made with **Assemble → Constrain Components** (Align, Angle, and so on). Rename, show or hide, suppress, or delete a constraint. Hover a constraint to highlight the faces and edges it uses in the canvas; the highlight goes away when the pointer leaves. The target button keeps that highlight on. Fusion does not let add-ins select an assembly constraint or its timeline entry, so the timeline is not highlighted. Offsets, angles, and flips are edited in Fusion. Select a face, edge, point, body, or component to list the constraints that use it. Fusion's add-in API for assembly constraints is still a preview, so new constraints are created in Fusion, not here.
+- **Help** explains sketch constraints and assembly constraints, and when to use each one. It stays available in part designs.
 
-Sketch dimensions stay in ProParams. Rigid groups and contact sets are not managed here.
+Sketch dimensions stay in ProParams. Joints, rigid groups, and contact sets are not managed here.
 
 ## Install
 

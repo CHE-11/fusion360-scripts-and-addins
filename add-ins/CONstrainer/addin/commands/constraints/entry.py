@@ -11,7 +11,7 @@ import adsk.core
 from ... import config
 from ...lib import fusionAddInUtils as futil
 from . import assembly_constraints
-from . import joints
+from . import design_utils
 from . import sketch_constraints
 
 app = adsk.core.Application.get()
@@ -19,7 +19,7 @@ ui = app.userInterface
 
 CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_PalleteShow'
 CMD_NAME = 'CONstrainer'
-CMD_DESCRIPTION = 'Create and manage sketch constraints and assembly joints'
+CMD_DESCRIPTION = 'Create and manage sketch constraints and assembly constraints'
 PALETTE_NAME = 'CONstrainer'
 PALETTE_ID = config.PALETTE_ID
 PALETTE_DOCKING = adsk.core.PaletteDockingStates.PaletteDockStateRight
@@ -226,24 +226,6 @@ def route_message(action, data):
     if action == 'sketch:add':
         return _ok(sketch_constraints.add_constraint(data))
 
-    if action == 'joint:list':
-        return _ok(joints.list_joints())
-    if action == 'joint:delete':
-        return _ok(joints.delete_joint(data))
-    if action == 'joint:rename':
-        return _ok(joints.rename_joint(data))
-    if action == 'joint:setSuppressed':
-        return _ok(joints.set_suppressed(data))
-    if action == 'joint:setVisible':
-        return _ok(joints.set_visible(data))
-    if action == 'joint:select':
-        token = data.get('token', '') if isinstance(data, dict) else ''
-        return _ok(joints.select_joint(token))
-    if action == 'joint:readSelection':
-        return _ok(joints.read_selection())
-    if action == 'joint:add':
-        return _ok(joints.add_joint(data))
-
     if action == 'constraint:list':
         return _ok(assembly_constraints.list_constraints())
     if action == 'constraint:readSelection':
@@ -262,12 +244,6 @@ def route_message(action, data):
         return _ok(assembly_constraints.clear_highlight(data if isinstance(data, dict) else {}))
     if action == 'constraint:select':
         return _ok(assembly_constraints.select(data))
-    if action == 'constraint:setValue':
-        return _ok(assembly_constraints.set_value(data))
-    if action == 'constraint:setFlipped':
-        return _ok(assembly_constraints.set_flipped(data))
-    if action == 'constraint:setRelationshipSuppressed':
-        return _ok(assembly_constraints.set_relationship_suppressed(data))
 
     return _err(f'Unknown action: {action}')
 
@@ -282,7 +258,6 @@ def on_document_activated(args):
     _push('docActivated', context)
     _push('selectionChanged', {
         'sketch': sketch_constraints.empty_selection(),
-        'joint': joints.empty_selection(),
         'constraint': assembly_constraints.empty_selection(),
         'document': context,
     })
@@ -292,10 +267,9 @@ def on_selection_changed(args):
     if assembly_constraints.selection_suspended():
         return
     context = _document_context()
-    allowed = context['jointsAllowed']
+    allowed = context['assemblyAllowed']
     _push('selectionChanged', {
         'sketch': sketch_constraints.read_selection(),
-        'joint': joints.read_selection() if allowed else joints.empty_selection(),
         'constraint': assembly_constraints.read_selection() if allowed else assembly_constraints.empty_selection(),
         'document': context,
     })
@@ -339,11 +313,11 @@ def _active_doc_name():
 
 
 def _document_context():
-    intent = joints.design_intent()
+    intent = design_utils.design_intent()
     return {
         'doc': _active_doc_name(),
         'intent': intent,
-        'jointsAllowed': intent in ('assembly', 'hybrid'),
+        'assemblyAllowed': intent in ('assembly', 'hybrid'),
     }
 
 
