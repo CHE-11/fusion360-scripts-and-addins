@@ -7,6 +7,7 @@ Scripts and add-ins for [Autodesk Fusion](https://www.autodesk.com/products/fusi
 | [ProParams](#proparams) | Add-in | `add-ins/ProParams/addin` |
 | [CONstrainer](#constrainer) | Add-in | `add-ins/CONstrainer/addin` |
 | [File Explorer](#file-explorer) | Add-in | `add-ins/FileExplorer/addin` |
+| [Threader](#threader) | Add-in | `add-ins/Threader/addin` |
 | [Script Runner](#script-runner) | Add-in | `add-ins/ScriptRunner/addin` |
 | [Restart Add-Ins](#restart-add-ins) | Add-in | `add-ins/RestartAddIns/addin` |
 | [Step File Body Combiner](#step-file-body-combiner) | Script | `scripts/Step-File-Body-Combiner` |
@@ -32,9 +33,9 @@ The script stays in that list. Run it again from the same dialog whenever you ne
 3. Select the add-in folder from the table above (`addin`, not the parent project folder).
 4. Select the add-in and click **Run**.
 
-The add-ins are set to run on startup. Palette HTML is already built into ProParams, CONstrainer, and File Explorer, so there is no build step for normal use. Rebuild only when you change a React client. Script Runner and Restart Add-Ins are Python only. See [Developing the add-ins](#developing-the-add-ins).
+The add-ins are set to run on startup. Palette HTML is already built into ProParams, CONstrainer, File Explorer, and Threader, so there is no build step for normal use. Rebuild only when you change a React client. Script Runner and Restart Add-Ins are Python only. See [Developing the add-ins](#developing-the-add-ins).
 
-Palette commands are on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab **CHE** group, and **Utilities → ADD-INS**. ProParams and CONstrainer are on the Sketch tab. The Solid tab **CHE** group holds ProParams, CONstrainer, File Explorer, Script Runner, and Restart Add-Ins.
+Palette commands are on the Design workspace **Sketch** tab (while a sketch is open), the **Solid** tab **CHE** group, and **Utilities → ADD-INS**. ProParams and CONstrainer are on the Sketch tab. The Solid tab **CHE** group holds ProParams, CONstrainer, File Explorer, Threader, Script Runner, and Restart Add-Ins.
 
 **How to add commands to Panels**
 
@@ -47,7 +48,7 @@ RIBBON_TABS = (
 )
 ```
 
-`commands/.../entry.py` reads that list on start, creates the **CHE** panel if it is missing, and pins the command on it. ProParams and CONstrainer share `CHE_SketchPanel` and `CHE_SolidPanel`. File Explorer, Script Runner, and Restart Add-Ins use `CHE_SolidPanel` only. On stop, an add-in removes its own control and deletes the panel only when nothing else is left on it. Add another tab by adding a tuple. `SketchTab` only appears while a sketch is open.
+`commands/.../entry.py` reads that list on start, creates the **CHE** panel if it is missing, and pins the command on it. ProParams and CONstrainer share `CHE_SketchPanel` and `CHE_SolidPanel`. File Explorer, Threader, Script Runner, and Restart Add-Ins use `CHE_SolidPanel` only. On stop, an add-in removes its own control and deletes the panel only when nothing else is left on it. Add another tab by adding a tuple. `SketchTab` only appears while a sketch is open.
 
 To list the tab and panel ids in your Fusion build, set the Text Commands window to **Py** and run:
 
@@ -94,6 +95,22 @@ Install, search limits, and the build steps are in [`add-ins/FileExplorer/README
 
 ---
 
+## Threader
+
+Models threads and heat-set insert pockets for 3D printing from a palette docked on the right. Clearance is part of the solid. After a test print, **Too tight** and **Too loose** update that fit.
+
+The palette has three tabs:
+
+- **Thread** uses the selected cylindrical face. Choose male or female, and outset (add material) or inset (cut material). Printable trapezoids are for plastic-on-plastic parts. ISO metric coarse (M1 through M24) and imperial UNC and UNF are for metal fasteners.
+- **Heat-set** cuts a pocket for a short knurled brass insert, M2 through M6, or a custom size.
+- **Adjust** lists the threads and pockets in the design and changes the fit.
+
+The design has to be in Parametric Modeling. The command is on the **Solid** tab **CHE** group only, plus **Utilities → ADD-INS**.
+
+Fit defaults, face roles, and the build steps are in [`add-ins/Threader/README.md`](add-ins/Threader/README.md).
+
+---
+
 ## Script Runner
 
 Adds a **Scripts** button to the Design workspace **Solid** tab **CHE** group and to **Utilities → ADD-INS**. Click it, choose a saved script, and click **Run**. The list is your scripts folder and any script linked with **+**. Sample scripts and add-ins are left out. Choose **Refresh** after you create or link a script.
@@ -134,15 +151,15 @@ This is for sets of bodies that only need a short, ordered name, such as letter 
 
 ## Developing the add-ins
 
-ProParams, CONstrainer, and File Explorer are a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads. Script Runner and Restart Add-Ins are Python only and have no client build.
+ProParams, CONstrainer, File Explorer, and Threader are a Fusion Python package in `addin/` plus a React, TypeScript, and Vite client in `client/`. The client build writes a single `index.html` and `static/palette.js` into the add-in’s palette HTML folder, which is what Fusion loads. Script Runner and Restart Add-Ins are Python only and have no client build.
 
-From the client folder (`add-ins/ProParams/client` or `add-ins/CONstrainer/client`):
+From the client folder (`add-ins/ProParams/client`, `add-ins/CONstrainer/client`, `add-ins/FileExplorer/client`, or `add-ins/Threader/client`):
 
 ```bash
 pnpm install
 pnpm build
 ```
 
-The same commands are VS Code tasks: **ProParams - Deps**, **ProParams - Build**, **CONstrainer - Deps**, and **CONstrainer - Build**.
+The same commands are VS Code tasks: **ProParams - Deps**, **ProParams - Build**, **CONstrainer - Deps**, **CONstrainer - Build**, **Threader - Deps**, and **Threader - Build**.
 
-CONstrainer can load the Vite dev server instead of the built page. Set `REACT_DEV = True` in `add-ins/CONstrainer/addin/config.py`, then run `pnpm start` in `add-ins/CONstrainer/client` (or the **CONstrainer - Start** task). The palette uses `http://localhost:5173/`. Set `REACT_DEV` back to `False` before you rely on the built page.
+CONstrainer can load the Vite dev server instead of the built page. Set `REACT_DEV = True` in `add-ins/CONstrainer/addin/config.py`, then run `pnpm start` in `add-ins/CONstrainer/client` (or the **CONstrainer - Start** task). The palette uses `http://localhost:5173/`. Threader does the same from `add-ins/Threader/addin/config.py` and `add-ins/Threader/client`, on `http://localhost:5174/`. Set `REACT_DEV` back to `False` before you rely on the built page.

@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"a4c8e1d2-6b57-4f90-9c33-2d7e8a1b5f64",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Parametric threads and heat-set inserts for 3D printing"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}
