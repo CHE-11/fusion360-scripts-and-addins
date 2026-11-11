@@ -1,0 +1,13 @@
+{
+	"autodeskProduct": "Fusion360",
+	"type": "addin",
+	"id": "1FE8E00F-E55B-4C94-B8AE-1AEAEE81C509",
+	"author": "Ruud Boeklagen - Properties++",
+	"description": {
+		"":	"Manage your design data by adding custom properties to your components and designs. When done; export all data to a Bill Of Materials."
+	},
+	"version": "1.0.1",
+	"runOnStartup": true,
+	"supportedOS": "windows",
+	"autodeskLibraries": ["application", "dashboard", "geometry", "materials", "userInterface", "utilities", "bRep", "components", "construction", "features", "fusion", "meshBody", "meshData", "sketch", "tSpline"]
+}

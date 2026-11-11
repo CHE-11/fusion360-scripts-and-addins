@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"9CAE3C73-2712-4223-AD23-375B20D74E1E",
+	"author":	"pawelzwronek",
+	"description":	{
+		"":	"Disables gestures so you can use RMB to pan and orbit the viewport"
+	},
+	"version":	"1.6",
+	"runOnStartup":	true,
+	"supportedOS":	"windows",
+	"editEnabled":	true
+}

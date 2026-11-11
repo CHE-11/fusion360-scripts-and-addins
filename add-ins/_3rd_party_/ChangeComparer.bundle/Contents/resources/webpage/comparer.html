@@ -1,0 +1,73 @@
+<!-- saved from url=(0014)about:internet -->
+<!DOCTYPE html>
+
+<!-- 
+    We needed to add the "saved from url=(0014)about:internet" line at the top to make IE run the JavaScript code in it.
+    We also needed to make sure that each line finishes with \r\n otherwise it does not work.
+    More info: http://stackoverflow.com/questions/7038724/how-to-automaticaly-allow-blocked-content-in-ie 
+-->
+
+<html>
+<head>
+<title>State Comparer for Fusion 360</title>
+<style>
+    body {
+        width:100%; 
+        height:auto; 
+        margin:0; 
+        padding:0;
+    }
+
+    div {
+        position: absolute; 
+    }
+
+    div.Note {       
+        margin-left: auto; 
+        margin-right: auto; 
+        left: 0; 
+        right: 0; 
+        opacity:0.5; 
+        text-align:center;
+    }
+
+    img {
+        display: block;
+        width:100%; height:auto;
+    }
+
+    img.Hide {
+        display: none;
+    }
+
+    h1 {
+        margin:10px;
+    }
+</style>
+</head>
+<body>
+<script>
+function swap() { 
+  var img1 = document.getElementById('PrevImageId');
+  var img2 = document.getElementById('CurrImageId');
+  var txt = document.getElementById('TextId');
+  
+  if (img1.className === "Hide") {
+  	img1.className = ""
+  	img2.className = "Hide"
+  	txt.innerHTML = "Previous state";
+  } else {
+    img1.className = "Hide"
+    img2.className = ""
+	txt.innerHTML = "Current state";
+  }
+}
+</script>
+
+<div class="Note">Click on image to swap between current and previous state</div>
+<div><h1 id='TextId'>Current state</h1></div>
+<img class="Hide" id='PrevImageId' src='previous.png' onclick='swap();' />
+<img id='CurrImageId' src='current.png' onclick='swap();' />
+</body>
+
+</html>

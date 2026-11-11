@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+	ProductType="Application"
+
+	AutodeskProduct="Fusion360"
+	Name="AnyShortcut"
+	Description="Shows a menu that let you assign shortcuts to your last run commands."
+	AppVersion="1.1.1"
+	Author="Thomas Axelsson"
+	AppNameSpace="com.autodesk.exchange.Fusion360.AnyShortcut"
+	HelpFile="./Contents/docs/Help.html"
+	OnlineDocumentation="https://github.com/thomasa88"
+
+	ProductCode="*"
+	UpgradeCode="{3C3BF21D-C815-4ECD-886E-2FDEE45194A9}" >
+	
+	<CompanyDetails Name="Thomas A"
+		Phone=" "
+		Url="https://github.com/thomasa88"
+		Email="thomasa88+fusion@gmail.com" />
+
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64_mac" Platform="Fusion360" SeriesMin=""  />
+
+	<Components>
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64_mac" Platform="Fusion360" SeriesMin="" />
+		    <ComponentEntry AppName="AnyShortcut" Version="1.1.1" ModuleName="./Contents/AnyShortcut.manifest" AppDescription="Shows a menu that let you assign shortcuts to your last run commands." />
+	</Components>
+	
+</ApplicationPackage>

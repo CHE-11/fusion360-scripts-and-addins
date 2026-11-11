@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+	ProductType="Application"
+
+	AutodeskProduct="Fusion360"
+	Name="Properties++"
+	Description="Manage your design data by adding custom properties to your components and designs. When done; export all data to a Bill Of Materials."
+	AppVersion="1.0.1"
+	Author="Ruud Boeklagen"
+	AppNameSpace="com.autodesk.exchange.Fusion360.Properties++"
+	HelpFile="./Contents/docs/Properties++.html"
+	OnlineDocumentation="https://kleitools.azurewebsites.net/"
+
+	ProductCode="*"
+	UpgradeCode="{CC2B7CE5-C3F7-4F85-9232-587C7ACA14E2}" >
+	
+	<CompanyDetails Name="KleiTools"
+		Phone=" "
+		Url="https://kleitools.azurewebsites.net/"
+		Email="ContactKleiTools@gmail.com" />
+
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64" Platform="Fusion360" SeriesMin=""  />
+
+	<Components>
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64" Platform="Fusion360" SeriesMin="" />
+		    <ComponentEntry AppName="Properties++" Version="1.0.1" ModuleName="./Contents/Properties++.manifest" AppDescription="Manage your design data by adding custom properties to your components and designs. When done; export all data to a Bill Of Materials." />
+	</Components>
+	
+</ApplicationPackage>

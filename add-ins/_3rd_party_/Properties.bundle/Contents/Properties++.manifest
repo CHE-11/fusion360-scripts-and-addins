@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"1FE8E00F-E55B-4C94-B8AE-1AEAEE81C509",
+	"author":	"KleiTools",
+	"description":	{
+		"":	""
+	},
+	"version":	"1.0.1",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}

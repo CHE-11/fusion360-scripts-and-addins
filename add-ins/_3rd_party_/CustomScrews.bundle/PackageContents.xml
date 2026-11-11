@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+	ProductType="Application"
+
+	AutodeskProduct="Fusion360"
+	Name="Custom Screw Creator"
+	Description="Create a cylinderhead screw by manipulating different parameters or select preset values."
+	AppVersion="1.3.1"
+	Author="Fabian Schurig"
+	AppNameSpace="com.autodesk.exchange.Fusion360.Custom Screw Creator"
+	HelpFile="./Contents/docs/CustomScrewCreator.html"
+	OnlineDocumentation="f.schurig@tum.de"
+
+	ProductCode="*"
+	UpgradeCode="{2CB58934-A781-422E-A921-3E87D9577AF9}" >
+	
+	<CompanyDetails Name="Fabian Schurig"
+		Phone=" "
+		Url="https://apps.autodesk.com/en/Publisher/PublisherHomepage?ID=ESAVN5AMAG2L"
+		Email="f.schurig@tum.de" />
+
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64|mac" Platform="Fusion360" SeriesMin=""  />
+
+	<Components>
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64|mac" Platform="Fusion360" SeriesMin="" />
+		    <ComponentEntry AppName="Custom Screw Creator" Version="1.3.1" ModuleName="./Contents/CustomScrews.manifest" AppDescription="Create a cylinderhead screw by manipulating different parameters or select preset values." />
+	</Components>
+	
+</ApplicationPackage>

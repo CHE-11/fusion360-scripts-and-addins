@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+	ProductType="Application"
+
+	AutodeskProduct="Fusion360"
+	Name="Change Comparer"
+	Description="Lets the user visually compare the current state of the model to a previous one"
+	AppVersion="1.1.0"
+	Author="Autodesk, Inc."
+	AppNameSpace="com.autodesk.exchange.Fusion360.Change Comparer"
+	HelpFile="./Contents/docs/ChangeComparer.html"
+	OnlineDocumentation="www.autodesk.com"
+
+	ProductCode="*"
+	UpgradeCode="{21aa3e00-c720-48e4-8e58-0bd6e07331a2}" >
+	
+	<CompanyDetails Name="Autodesk, Inc."
+		Phone=" "
+		Url="www.autodesk.com"
+		Email="adam.nagy@autodesk.com" />
+
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64|macOS" Platform="Fusion360" SeriesMin=""  />
+
+	<Components>
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64|macOS" Platform="Fusion360" SeriesMin="" />
+		    <ComponentEntry AppName="Change Comparer" Version="1.1.0" ModuleName="./Contents/ChangeComparer.manifest" AppDescription="Lets the user visually compare the current state of the model to a previous one" />
+	</Components>
+	
+</ApplicationPackage>

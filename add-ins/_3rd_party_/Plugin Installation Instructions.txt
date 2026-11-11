@@ -1,0 +1,2 @@
+1. Navigate to this path -> C:\Users\Connor\AppData\Roaming\Autodesk\ApplicationPlugins\
+2. Copy over entire bundle folders to that path. 

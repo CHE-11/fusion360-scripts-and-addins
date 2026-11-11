@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+	ProductType="Application"
+
+	AutodeskProduct="Fusion360"
+	Name="NoGestures"
+	Description="Quick way to change visual style of active viewport"
+	AppVersion="1.6.0"
+	Author="Pawel Inc."
+	AppNameSpace="com.autodesk.exchange.Fusion360.NoGestures"
+	HelpFile="./Contents/docs/NoGestures.html"
+	OnlineDocumentation="blowman3@o2.pl"
+
+	ProductCode="*"
+	UpgradeCode="{9CAE3C73-2712-4223-AD23-375B20D74E1E}" >
+	
+	<CompanyDetails Name="Pawel Inc."
+		Phone=" "
+		Url="blowman3@o2.pl"
+		Email="blowman3@o2.pl" />
+
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64" Platform="Fusion360" SeriesMin=""  />
+
+	<Components>
+		<RuntimeRequirements SupportPath="./Contents/docs" OS="win64" Platform="Fusion360" SeriesMin="" />
+		    <ComponentEntry AppName="NoGestures" Version="1.6.0" ModuleName="./Contents/NoGestures.manifest" AppDescription="Quick way to change visual style of active viewport" />
+	</Components>
+	
+</ApplicationPackage>
