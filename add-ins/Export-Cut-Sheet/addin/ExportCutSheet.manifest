@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"32059797-fa7e-4218-a391-7381436580b3",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Export visible bodies to a CSV cut sheet and a dimensioned PDF drawing set"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}
