@@ -74,6 +74,11 @@ MIN_ANGLE_LINE_PT = 8.0
 MAX_ANGLES_PER_VIEW = 8
 FULL_CIRCLE_DEG = 359.0
 
+# Overview sheet: top and home above front and right.
+OVERVIEW_VIEWS = ('home', 'top', 'front', 'right')
+OVERVIEW_LABELS = {'home': 'HOME', 'top': 'TOP', 'front': 'FRONT', 'right': 'RIGHT'}
+OVERVIEW_LINE_WIDTH = 0.45
+
 
 @dataclass
 class ViewData:
@@ -94,6 +99,14 @@ class PartSheet:
     document_name: str
     size: tuple
     quantity: int = 1
+
+
+@dataclass
+class OverviewSheet:
+    # View name -> polylines of (u, v) paper-axis coordinates in model centimeters.
+    views: dict
+    document_name: str
+    body_count: int
 
 
 @dataclass
@@ -144,6 +157,64 @@ def project(point, view):
 def view_extent(size, view):
     u_axis, v_axis, _normal = VIEW_AXES[view]
     return size[u_axis], size[v_axis]
+
+
+def view_basis(direction, up):
+    """Paper (right, up) unit vectors for an orthographic camera looking along `direction`."""
+    d = _normalize(direction)
+    along = _dot(up, d)
+    paper_up = _normalize(tuple(up[i] - along * d[i] for i in range(3)))
+    return _cross(d, paper_up), paper_up
+
+
+def project_onto(point, basis):
+    right, up = basis
+    return (_dot(point, right), _dot(point, up))
+
+
+def default_view_directions(z_up=True):
+    """Fusion's standard (view direction, up vector) for each overview view."""
+    if z_up:
+        return {
+            'home': ((-1.0, 1.0, -1.0), (0.0, 0.0, 1.0)),
+            'top': ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+            'front': ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+            'right': ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        }
+    return {
+        'home': ((-1.0, -1.0, -1.0), (0.0, 1.0, 0.0)),
+        'top': ((0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
+        'front': ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+        'right': ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+    }
+
+
+def polyline_bounds(polylines):
+    """(min u, min v, max u, max v) over all points, or None when empty."""
+    us = [u for polyline in polylines for u, _v in polyline]
+    vs = [v for polyline in polylines for _u, v in polyline]
+    if not us:
+        return None
+    return min(us), min(vs), max(us), max(vs)
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a, b):
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _normalize(vector):
+    length = math.sqrt(_dot(vector, vector))
+    if length < 1e-12:
+        raise ValueError('zero-length vector')
+    return (vector[0] / length, vector[1] / length, vector[2] / length)
 
 
 def format_number(value, decimals):
@@ -235,6 +306,51 @@ def layout_views(size, area):
     top = ViewBox('top', front.x, front.y + front.height + VIEW_GAP, scale * length, scale * width)
     right = ViewBox('right', front.x + front.width + VIEW_GAP, front.y, scale * width, scale * thickness)
     return Layout(scale, label, {'front': front, 'top': top, 'right': right})
+
+
+def layout_overview(extents, area):
+    """Fit a 2 x 2 grid: top and home above front and right, all at one scale.
+
+    `extents` maps view name to (width, height) in centimeters. Views in a
+    column or row are centered in their cell, so aligned projections line up.
+    """
+    widths = {name: max(extents.get(name, (0.0, 0.0))[0], 0.0) for name in OVERVIEW_VIEWS}
+    heights = {name: max(extents.get(name, (0.0, 0.0))[1], 0.0) for name in OVERVIEW_VIEWS}
+    left_col = max(widths['top'], widths['front'])
+    right_col = max(widths['home'], widths['right'])
+    bottom_row = max(heights['front'], heights['right'])
+    top_row = max(heights['top'], heights['home'])
+    model_w = left_col + right_col
+    model_h = bottom_row + top_row
+    if model_w <= 0 or model_h <= 0:
+        raise ValueError('model has no measurable size')
+
+    area_x, area_y, area_w, area_h = area
+    fixed_w = LEFT_MARGIN + VIEW_GAP + RIGHT_MARGIN
+    fixed_h = BOTTOM_MARGIN + VIEW_GAP + TOP_MARGIN
+    raw = min((area_w - fixed_w) / model_w, (area_h - fixed_h) / model_h)
+    if raw <= 0:
+        raise ValueError('page is too small for the overview')
+    scale, label = standard_scale(raw)
+
+    total_w = scale * model_w + fixed_w
+    total_h = scale * model_h + fixed_h
+    x0 = area_x + (area_w - total_w) / 2.0 + LEFT_MARGIN
+    y0 = area_y + (area_h - total_h) / 2.0 + BOTTOM_MARGIN
+    x1 = x0 + scale * left_col + VIEW_GAP
+    y1 = y0 + scale * bottom_row + VIEW_GAP
+
+    def box(name, cell_x, cell_y, cell_w, cell_h):
+        width, height = scale * widths[name], scale * heights[name]
+        return ViewBox(name, cell_x + (cell_w - width) / 2.0, cell_y + (cell_h - height) / 2.0, width, height)
+
+    boxes = {
+        'front': box('front', x0, y0, scale * left_col, scale * bottom_row),
+        'right': box('right', x1, y0, scale * right_col, scale * bottom_row),
+        'top': box('top', x0, y1, scale * left_col, scale * top_row),
+        'home': box('home', x1, y1, scale * right_col, scale * top_row),
+    }
+    return Layout(scale, label, boxes)
 
 
 def resolve_arcs(view):
@@ -356,17 +472,27 @@ def angled_lines(lines, min_length):
     return found[:MAX_ANGLES_PER_VIEW]
 
 
-def build_document(parts, fmt, page_name, date_text):
+def build_document(parts, fmt, page_name, date_text, overview=None):
+    """One page per part, preceded by the model overview when one is given."""
     page_w, page_h = PAGE_SIZES[page_name]
-    title = parts[0].document_name if parts else 'Drawings'
+    if overview is not None:
+        title = overview.document_name
+    else:
+        title = parts[0].document_name if parts else 'Drawings'
     document = PdfDocument(f'{title} drawings')
-    for index, part in enumerate(parts, start=1):
-        page = document.add_page(page_w, page_h)
-        draw_part(page, part, fmt, date_text, index, len(parts))
+    sheet_count = len(parts) + (1 if overview is not None else 0)
+    sheet = 1
+    if overview is not None:
+        draw_overview(document.add_page(page_w, page_h), overview, fmt, date_text, sheet, sheet_count)
+        sheet += 1
+    for part in parts:
+        draw_part(document.add_page(page_w, page_h), part, fmt, date_text, sheet, sheet_count)
+        sheet += 1
     return document
 
 
-def draw_part(page, part, fmt, date_text, sheet, sheet_count):
+def _page_frame(page):
+    """Draw the border. Returns (drawing area, title block rect)."""
     border_x = BORDER_MARGIN
     border_y = BORDER_MARGIN
     border_w = page.width - 2 * BORDER_MARGIN
@@ -379,6 +505,56 @@ def draw_part(page, part, fmt, date_text, sheet, sheet_count):
         border_w - 2 * AREA_PADDING,
         border_h - TITLE_HEIGHT - 2 * AREA_PADDING,
     )
+    return area, (border_x, border_y, border_w, TITLE_HEIGHT)
+
+
+def draw_overview(page, overview, fmt, date_text, sheet, sheet_count):
+    """Home, top, front, and right views of the whole model with its overall size."""
+    area, title_rect = _page_frame(page)
+    bounds = {name: polyline_bounds(overview.views.get(name) or []) for name in OVERVIEW_VIEWS}
+    extents = {
+        name: (b[2] - b[0], b[3] - b[1]) if b else (0.0, 0.0)
+        for name, b in bounds.items()
+    }
+    layout = layout_overview(extents, area)
+    scale = layout.scale
+
+    for name in OVERVIEW_VIEWS:
+        box = layout.boxes[name]
+        b = bounds[name]
+        if b:
+            for polyline in overview.views[name]:
+                page.polyline(
+                    [(box.x + (u - b[0]) * scale, box.y + (v - b[1]) * scale) for u, v in polyline],
+                    OVERVIEW_LINE_WIDTH,
+                )
+        page.text(box.x + box.width / 2.0, box.y + box.height + 8.0, OVERVIEW_LABELS[name], 7, bold=True, align='center')
+
+    width, height = extents['front']
+    depth = extents['right'][0]
+    front, right = layout.boxes['front'], layout.boxes['right']
+    if width > 0:
+        _linear_dim(page, front.x, front.x + front.width, front.y, front.y - DIM_OFFSET, fmt.format(width), True)
+    if height > 0:
+        _linear_dim(page, front.y, front.y + front.height, front.x, front.x - DIM_OFFSET, fmt.format(height), False)
+    if depth > 0:
+        _linear_dim(page, right.x, right.x + right.width, right.y, right.y - DIM_OFFSET, fmt.format(depth), True)
+
+    size_text = ' x '.join(fmt.format(value) for value in (width, depth, height))
+    _draw_cells(page, title_rect, (
+        ('DRAWING', 'MODEL OVERVIEW', 2.6),
+        ('DOCUMENT', overview.document_name, 3.0),
+        ('OVERALL (W x D x H)', size_text, 2.8),
+        ('BODIES', str(overview.body_count), 0.8),
+        ('UNITS', _unit_text(fmt), 0.9),
+        ('SCALE', layout.scale_label, 0.9),
+        ('DATE', date_text, 1.2),
+        ('SHEET', f'{sheet} / {sheet_count}', 0.9),
+    ))
+
+
+def draw_part(page, part, fmt, date_text, sheet, sheet_count):
+    area, title_rect = _page_frame(page)
     layout = layout_views(part.size, area)
     views = {name: part.views.get(name) or ViewData() for name in VIEW_AXES}
 
@@ -389,7 +565,7 @@ def draw_part(page, part, fmt, date_text, sheet, sheet_count):
     _draw_view_labels(page, layout.boxes)
     _draw_title_block(
         page,
-        (border_x, border_y, border_w, TITLE_HEIGHT),
+        title_rect,
         part,
         fmt,
         layout.scale_label,
@@ -659,22 +835,28 @@ def _draw_view_labels(page, boxes):
 
 
 def _draw_title_block(page, rect, part, fmt, scale_label, date_text, sheet, sheet_count):
-    x, y, width, height = rect
-    page.line(x, y + height, x + width, y + height, 1.0)
-
     size_text = ' x '.join(fmt.format(value) for value in part.size)
-    unit_text = f'{fmt.unit} (1/{fmt.denominator})' if fmt.uses_fractions else fmt.unit
-    cells = (
+    _draw_cells(page, rect, (
         ('PART', part.body_name, 3.0),
         ('COMPONENT', part.component_name, 2.2),
         ('DOCUMENT', part.document_name, 2.4),
         ('SIZE (L x W x T)', size_text, 2.8),
         ('QTY', str(part.quantity), 0.6),
-        ('UNITS', unit_text, 0.9),
+        ('UNITS', _unit_text(fmt), 0.9),
         ('SCALE', scale_label, 0.9),
         ('DATE', date_text, 1.2),
         ('SHEET', f'{sheet} / {sheet_count}', 0.9),
-    )
+    ))
+
+
+def _unit_text(fmt):
+    return f'{fmt.unit} (1/{fmt.denominator})' if fmt.uses_fractions else fmt.unit
+
+
+def _draw_cells(page, rect, cells):
+    """Title block row of (label, value, relative width) cells."""
+    x, y, width, height = rect
+    page.line(x, y + height, x + width, y + height, 1.0)
     total = sum(weight for _label, _value, weight in cells)
     cursor = x
     for index, (label, value, weight) in enumerate(cells):

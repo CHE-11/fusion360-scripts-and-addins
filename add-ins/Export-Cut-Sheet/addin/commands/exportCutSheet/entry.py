@@ -20,8 +20,8 @@ ui = app.userInterface
 CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_Export'
 CMD_NAME = 'Export Cut Sheet'
 CMD_DESCRIPTION = (
-    'Export visible bodies to a CSV cut sheet, and draw non-rectangular '
-    'parts in a PDF with dimensioned three-view drawings.'
+    'Export visible bodies to a CSV cut sheet and a PDF of dimensioned '
+    'three-view drawings.'
 )
 IS_PROMOTED = True
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
@@ -34,7 +34,6 @@ INPUT_FRACTIONS = 'useFractions'
 INPUT_FRACTION_PRECISION = 'fractionPrecision'
 INPUT_CSV = 'exportCsv'
 INPUT_PDF = 'exportPdf'
-INPUT_PDF_RECTS = 'pdfRectangles'
 INPUT_PAGE = 'pageSize'
 
 SCOPE_VISIBLE = 'All visible bodies'
@@ -49,7 +48,6 @@ _settings = {
     'denominator': 16,
     'csv': True,
     'pdf': True,
-    'pdf_rects': False,
     'page': 'Letter',
 }
 
@@ -130,13 +128,8 @@ def command_created(args):
     inputs.addIntegerSpinnerCommandInput(INPUT_DECIMALS, 'Decimal places', 0, 6, 1, _settings['decimals'])
     _sync_number_inputs(inputs)
 
-    inputs.addBoolValueInput(INPUT_CSV, 'CSV (all bodies)', True, '', _settings['csv'])
-    inputs.addBoolValueInput(INPUT_PDF, 'PDF (complex parts)', True, '', _settings['pdf'])
-
-    pdf_rects = inputs.addBoolValueInput(
-        INPUT_PDF_RECTS, 'Include rectangles in PDF', True, '', _settings['pdf_rects']
-    )
-    pdf_rects.isEnabled = _settings['pdf']
+    inputs.addBoolValueInput(INPUT_CSV, 'CSV', True, '', _settings['csv'])
+    inputs.addBoolValueInput(INPUT_PDF, 'PDF', True, '', _settings['pdf'])
 
     page = inputs.addDropDownCommandInput(
         INPUT_PAGE, 'Page size', adsk.core.DropDownStyles.TextListDropDownStyle
@@ -162,9 +155,7 @@ def command_input_changed(args):
     elif changed.id in (INPUT_UNITS, INPUT_FRACTIONS):
         _sync_number_inputs(inputs)
     elif changed.id == INPUT_PDF:
-        enabled = inputs.itemById(INPUT_PDF).value
-        inputs.itemById(INPUT_PDF_RECTS).isEnabled = enabled
-        inputs.itemById(INPUT_PAGE).isEnabled = enabled
+        inputs.itemById(INPUT_PAGE).isEnabled = inputs.itemById(INPUT_PDF).value
 
 
 def command_validate(args):
@@ -199,7 +190,6 @@ def command_execute(args):
     _settings['denominator'] = _denominator_from_label(_selected_name(inputs, INPUT_FRACTION_PRECISION))
     _settings['csv'] = inputs.itemById(INPUT_CSV).value
     _settings['pdf'] = inputs.itemById(INPUT_PDF).value
-    _settings['pdf_rects'] = inputs.itemById(INPUT_PDF_RECTS).value
     _settings['page'] = _selected_name(inputs, INPUT_PAGE)
 
     selected = None
@@ -245,25 +235,22 @@ def _run_export(design, candidates, folder):
     finally:
         _hide_progress(progress)
 
-    rectangles = [info for info in measured if info.is_rectangle]
-    complex_parts = [info for info in measured if not info.is_rectangle]
-
     lines = []
     written = []
     drawn_keys = set()
 
     if _settings['pdf']:
-        pdf_bodies = complex_parts + (rectangles if _settings['pdf_rects'] else [])
-        if pdf_bodies:
+        if measured:
             pdf_path = os.path.join(folder, f'{safe_name}_drawings.pdf')
-            pages, pdf_failed, drawn_keys = _write_pdf(pdf_path, pdf_bodies, doc_name, fmt)
+            overview = _build_overview(design, candidates, doc_name, failed)
+            pages, pdf_failed, drawn_keys = _write_pdf(pdf_path, measured, doc_name, fmt, overview)
             failed.extend(pdf_failed)
             if pages:
                 written.append(pdf_path)
                 lines.append(f'PDF: {pages} drawing pages')
                 lines.append(f'  {pdf_path}')
         else:
-            lines.append('PDF: no complex bodies to draw, so no PDF was written.')
+            lines.append('PDF: no bodies to draw, so no PDF was written.')
 
     if _settings['csv']:
         csv_path = os.path.join(folder, f'{safe_name}_cut_sheet.csv')
@@ -311,7 +298,26 @@ def _run_export(design, candidates, folder):
         )
 
 
-def _write_pdf(path, infos, doc_name, fmt):
+def _build_overview(design, candidates, doc_name, failed):
+    """Overview of every visible body, even when only some bodies were selected."""
+    progress = _show_progress('Drawing model overview', 1)
+    try:
+        _advance_progress(progress, 'Drawing model overview', 0)
+        if _settings['scope'] == SCOPE_SELECTED:
+            candidates = body_utils.collect(design) or candidates
+        views = body_utils.extract_overview(design, candidates)
+        if not any(views.values()):
+            return None
+        return drawing.OverviewSheet(views=views, document_name=doc_name, body_count=len(candidates))
+    except Exception:
+        failed.append(('Model overview', 'could not be drawn'))
+        futil.log(f'Export Cut Sheet: overview failed\n{traceback.format_exc()}', adsk.core.LogLevels.ErrorLogLevel)
+        return None
+    finally:
+        _hide_progress(progress)
+
+
+def _write_pdf(path, infos, doc_name, fmt, overview=None):
     groups = body_utils.group_identical(infos)
     failed = []
     sheets = []
@@ -330,7 +336,7 @@ def _write_pdf(path, infos, doc_name, fmt):
     finally:
         _hide_progress(progress)
 
-    if not sheets:
+    if not sheets and overview is None:
         return 0, failed, set()
 
     date_text = datetime.date.today().isoformat()
@@ -346,14 +352,14 @@ def _write_pdf(path, infos, doc_name, fmt):
         for views, info, quantity in sheets
     ]
     try:
-        document = drawing.build_document(parts, fmt, _settings['page'], date_text)
+        document = drawing.build_document(parts, fmt, _settings['page'], date_text, overview)
         document.save(path)
     except Exception:
         failed.append(('PDF', _short_error()))
         futil.log(f'Export Cut Sheet: PDF failed\n{traceback.format_exc()}', adsk.core.LogLevels.ErrorLogLevel)
         return 0, failed, set()
     drawn_keys = {body_utils.identity_key(info) for _views, info, _quantity in sheets}
-    return len(parts), failed, drawn_keys
+    return len(document.pages), failed, drawn_keys
 
 
 def _sync_number_inputs(inputs):
@@ -403,9 +409,61 @@ def _safe_filename(name):
 def _ask_folder():
     dialog = ui.createFolderDialog()
     dialog.title = 'Choose a folder for the cut sheet'
+    downloads = _downloads_folder()
+    if downloads and os.path.isdir(downloads):
+        try:
+            dialog.initialDirectory = downloads
+        except Exception:
+            futil.log(
+                f'Export Cut Sheet: could not open in Downloads\n{traceback.format_exc()}',
+                adsk.core.LogLevels.WarningLogLevel,
+            )
     if dialog.showDialog() != adsk.core.DialogResults.DialogOK:
         return None
     return dialog.folder
+
+
+def _downloads_folder():
+    """The current user's Downloads folder, including a relocated Windows folder."""
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ('Data1', wintypes.DWORD),
+                    ('Data2', wintypes.WORD),
+                    ('Data3', wintypes.WORD),
+                    ('Data4', ctypes.c_ubyte * 8),
+                ]
+
+            folder_id = GUID(
+                0x374DE290,
+                0x123F,
+                0x4565,
+                (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
+            )
+            path_ptr = ctypes.c_wchar_p()
+            shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+            shell32.SHGetKnownFolderPath.argtypes = [
+                ctypes.POINTER(GUID),
+                wintypes.DWORD,
+                wintypes.HANDLE,
+                ctypes.POINTER(ctypes.c_wchar_p),
+            ]
+            shell32.SHGetKnownFolderPath.restype = ctypes.c_long
+            if shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(path_ptr)) == 0:
+                folder = path_ptr.value
+                ctypes.WinDLL('ole32').CoTaskMemFree(path_ptr)
+                if folder:
+                    return os.path.normpath(folder)
+        except Exception:
+            futil.log(
+                f'Export Cut Sheet: could not resolve Downloads\n{traceback.format_exc()}',
+                adsk.core.LogLevels.WarningLogLevel,
+            )
+    return os.path.normpath(os.path.join(os.path.expanduser('~'), 'Downloads'))
 
 
 def _open_folder(folder):

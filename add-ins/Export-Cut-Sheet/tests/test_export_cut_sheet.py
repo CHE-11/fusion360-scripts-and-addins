@@ -214,6 +214,64 @@ class LayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             drawing.layout_views((0.0, 0.0, 0.0), (0, 0, 500, 500))
 
+    def test_overview_grid_fits_and_aligns(self):
+        area = (50.0, 80.0, 700.0, 450.0)
+        extents = {'top': (100.0, 40.0), 'front': (100.0, 60.0), 'right': (40.0, 60.0), 'home': (110.0, 90.0)}
+        layout = drawing.layout_overview(extents, area)
+        boxes = layout.boxes
+        top, front, right, home = boxes['top'], boxes['front'], boxes['right'], boxes['home']
+        self.assertAlmostEqual(top.x, front.x)
+        self.assertAlmostEqual(front.y, right.y)
+        self.assertGreater(top.y, front.y + front.height)
+        self.assertGreater(home.y, right.y + right.height)
+        self.assertGreater(right.x, front.x + front.width)
+        self.assertGreater(home.x, top.x + top.width)
+        self.assertAlmostEqual(front.width, layout.scale * 100.0)
+        self.assertGreaterEqual(front.x - drawing.LEFT_MARGIN, area[0] - 1e-6)
+        self.assertLessEqual(home.x + home.width + drawing.RIGHT_MARGIN, area[0] + area[2] + 1e-6)
+        self.assertLessEqual(home.y + home.height + drawing.TOP_MARGIN, area[1] + area[3] + 1e-6)
+
+    def test_overview_empty_raises(self):
+        with self.assertRaises(ValueError):
+            drawing.layout_overview({}, (0, 0, 500, 500))
+
+
+class OverviewProjectionTests(unittest.TestCase):
+    def test_z_up_views(self):
+        views = drawing.default_view_directions(z_up=True)
+        point = (1.0, 2.0, 3.0)
+        self.assertEqual(self.project(point, *views['top']), (1.0, 2.0))
+        self.assertEqual(self.project(point, *views['front']), (1.0, 3.0))
+        self.assertEqual(self.project(point, *views['right']), (2.0, 3.0))
+
+    def test_y_up_views(self):
+        views = drawing.default_view_directions(z_up=False)
+        point = (1.0, 2.0, 3.0)
+        self.assertEqual(self.project(point, *views['top']), (1.0, -3.0))
+        self.assertEqual(self.project(point, *views['front']), (1.0, 2.0))
+        self.assertEqual(self.project(point, *views['right']), (-3.0, 2.0))
+
+    def test_home_view_shows_front_right_and_top(self):
+        basis = drawing.view_basis(*drawing.default_view_directions(z_up=True)['home'])
+        right, up = basis
+        self.assertGreater(right[0], 0)
+        self.assertGreater(right[1], 0)
+        self.assertAlmostEqual(right[2], 0.0)
+        self.assertGreater(up[2], 0)
+
+    def test_parallel_up_raises(self):
+        with self.assertRaises(ValueError):
+            drawing.view_basis((0.0, 0.0, -1.0), (0.0, 0.0, 1.0))
+
+    def test_transform_point(self):
+        matrix = (0, -1, 0, 10, 1, 0, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1)
+        self.assertEqual(bodies.transform_point(matrix, (1.0, 2.0, 3.0)), (8.0, 21.0, 33.0))
+
+    @staticmethod
+    def project(point, direction, up):
+        u, v = drawing.project_onto(point, drawing.view_basis(direction, up))
+        return (round(u, 9) + 0.0, round(v, 9) + 0.0)
+
 
 class CircleTests(unittest.TestCase):
     def test_duplicates_merge_and_groups_count(self):
@@ -351,6 +409,27 @@ class PdfTests(unittest.TestCase):
         content = document.pages[0].content().decode('ascii')
         self.assertIn('(15 3/4)', content)
         self.assertIn('(in \\(1/16\\))', content)
+
+    def test_overview_is_first_sheet(self):
+        box = [(0, 0, 0), (50, 0, 0), (50, 30, 0), (0, 30, 0), (0, 0, 0)]
+        lid = [(x, y, 20) for x, y, _z in box]
+        bases = {
+            name: drawing.view_basis(*direction)
+            for name, direction in drawing.default_view_directions(z_up=True).items()
+        }
+        views = {
+            name: [[drawing.project_onto(p, basis) for p in loop] for loop in (box, lid)]
+            for name, basis in bases.items()
+        }
+        overview = drawing.OverviewSheet(views, 'Shop Cart', 7)
+        document = drawing.build_document([notched_taper_part()], CM_1, 'Letter', '2026-11-23', overview)
+        self.assertEqual(len(document.pages), 2)
+        first = document.pages[0].content().decode('ascii')
+        for label in ('(HOME)', '(TOP)', '(FRONT)', '(RIGHT)', '(MODEL OVERVIEW)', '(1 / 2)'):
+            self.assertIn(label, first)
+        self.assertIn('(50.0 x 30.0 x 20.0)', first)
+        self.assertIn('(2 / 2)', document.pages[1].content().decode('ascii'))
+        self.assertIn(b'/Count 2', document.to_bytes())
 
     def test_save(self):
         document = drawing.build_document([notched_taper_part()], MM_1, 'Tabloid', '2026-11-22')

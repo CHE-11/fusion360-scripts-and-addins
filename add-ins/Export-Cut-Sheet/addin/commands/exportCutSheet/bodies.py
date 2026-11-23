@@ -18,6 +18,8 @@ class Candidate:
     name: str
     component_name: str
     body: object
+    # Matrix3D placing the native body in the root, or None when it already is.
+    transform: object = None
 
 
 @dataclass
@@ -53,7 +55,7 @@ def collect(design, selected=None):
                 continue
             seen.add(key)
             native = body.nativeObject or body
-            found.append(Candidate(body.name, _component_name(native, root), native))
+            found.append(Candidate(body.name, _component_name(native, root), native, _context_transform(body)))
         return found
 
     for body in root.bRepBodies:
@@ -69,8 +71,118 @@ def collect(design, selected=None):
                 continue
             proxy = body.createForAssemblyContext(occurrence)
             if proxy and proxy.isVisible:
-                found.append(Candidate(body.name, component.name, body))
+                found.append(Candidate(body.name, component.name, body, occurrence.transform2))
     return found
+
+
+def extract_overview(design, candidates):
+    """Project every candidate's edges, in root space, into the home, top, front, and right views.
+
+    Returns {view name: [polyline of (u, v)]}, oriented like Fusion's ViewCube.
+    """
+    bases = _overview_bases(design)
+    views = {name: [] for name in bases}
+    for candidate in candidates:
+        matrix = _matrix_values(candidate.transform)
+        tolerance = _stroke_tolerance(candidate.body)
+        for edge in candidate.body.edges:
+            points = _edge_points(edge, tolerance)
+            if len(points) < 2:
+                continue
+            if matrix:
+                points = [transform_point(matrix, point) for point in points]
+            for name, basis in bases.items():
+                projected = [drawing.project_onto(point, basis) for point in points]
+                if _span(projected) > 1e-6:
+                    views[name].append(projected)
+    return views
+
+
+def transform_point(matrix, point):
+    """Apply a row-major 4 x 4 matrix (Fusion's Matrix3D.asArray order) to a point."""
+    x, y, z = point
+    m = matrix
+    return (
+        m[0] * x + m[1] * y + m[2] * z + m[3],
+        m[4] * x + m[5] * y + m[6] * z + m[7],
+        m[8] * x + m[9] * y + m[10] * z + m[11],
+    )
+
+
+_NAMED_VIEWS = {
+    'home': 'homeNamedView',
+    'top': 'topNamedView',
+    'front': 'frontNamedView',
+    'right': 'rightNamedView',
+}
+
+
+def _overview_bases(design):
+    """Use the design's named view cameras, so custom Front or Home views are respected."""
+    defaults = drawing.default_view_directions(_is_z_up())
+    cameras = _named_view_cameras(design)
+    bases = {}
+    for name in drawing.OVERVIEW_VIEWS:
+        if name in cameras:
+            try:
+                bases[name] = drawing.view_basis(*cameras[name])
+                continue
+            except ValueError:
+                pass
+        bases[name] = drawing.view_basis(*defaults[name])
+    return bases
+
+
+def _named_view_cameras(design):
+    found = {}
+    try:
+        named_views = design.namedViews
+    except Exception:
+        return found
+    for name, attribute in _NAMED_VIEWS.items():
+        try:
+            camera = getattr(named_views, attribute).camera
+            eye, target = _xyz(camera.eye), _xyz(camera.target)
+            direction = (target[0] - eye[0], target[1] - eye[1], target[2] - eye[2])
+            found[name] = (direction, _xyz(camera.upVector))
+        except Exception:
+            continue
+    return found
+
+
+def _is_z_up():
+    try:
+        preferences = adsk.core.Application.get().preferences.generalPreferences
+        return preferences.defaultModelingOrientation != adsk.core.DefaultModelingOrientations.YUpModelingOrientation
+    except Exception:
+        return True
+
+
+def _context_transform(body):
+    try:
+        context = body.assemblyContext
+    except Exception:
+        return None
+    return context.transform2 if context else None
+
+
+def _matrix_values(transform):
+    if transform is None:
+        return None
+    try:
+        return tuple(transform.asArray())
+    except Exception:
+        return None
+
+
+def _stroke_tolerance(body):
+    try:
+        box = body.boundingBox
+        low, high = _xyz(box.minPoint), _xyz(box.maxPoint)
+        diagonal = math.sqrt(sum((high[i] - low[i]) ** 2 for i in range(3)))
+        return max(diagonal * 0.002, 0.001)
+    except Exception:
+        return 0.01
 
 
 def measure(candidate):
