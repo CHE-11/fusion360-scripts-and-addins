@@ -1,4 +1,4 @@
-"""Shaded, hidden-line-removed rendering for the model overview.
+"""Shaded, hidden-line-removed rendering for the overview and part home views.
 
 Faces are filled into a depth-buffered raster with flat lighting. Edges are
 checked against that depth buffer and only their visible stretches are kept,

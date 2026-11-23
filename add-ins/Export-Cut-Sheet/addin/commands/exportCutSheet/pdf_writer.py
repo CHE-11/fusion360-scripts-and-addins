@@ -89,6 +89,12 @@ class Page:
         self._stroke_style(line_width, None)
         self._ops.append(f'{_num(x)} {_num(y)} {_num(width)} {_num(height)} re S')
 
+    def fill_rect(self, x, y, width, height, gray):
+        """Fill a rectangle with a gray from 0 (black) to 1 (white)."""
+        self._ops.append(
+            f'q {_num(gray)} g {_num(x)} {_num(y)} {_num(width)} {_num(height)} re f Q'
+        )
+
     def text(self, x, y, text, size=9, bold=False, align='left', angle=0.0):
         if not text:
             return

@@ -21,7 +21,7 @@ CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_Export'
 CMD_NAME = 'Export Cut Sheet'
 CMD_DESCRIPTION = (
     'Export visible bodies to a CSV cut sheet and a PDF of dimensioned '
-    'three-view drawings.'
+    'drawings, a shaded home view of each part, and a cut sheet table.'
 )
 IS_PROMOTED = True
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
@@ -46,7 +46,7 @@ _settings = {
     'decimals': 3,
     'fractions': False,
     'denominator': 16,
-    'csv': True,
+    'csv': False,
     'pdf': True,
     'page': 'Letter',
 }
@@ -244,11 +244,11 @@ def _run_export(design, candidates, folder):
         if measured:
             pdf_path = os.path.join(folder, f'{safe_name}_drawings.pdf')
             overview = _build_overview(design, candidates, doc_name, failed)
-            pages, pdf_failed, drawn_keys = _write_pdf(pdf_path, measured, doc_name, fmt, overview)
+            pages, pdf_failed, drawn_keys = _write_pdf(pdf_path, measured, doc_name, fmt, overview, design)
             failed.extend(pdf_failed)
             if pages:
                 written.append(pdf_path)
-                lines.append(f'PDF: {pages} drawing pages')
+                lines.append(f'PDF: {pages} pages')
                 lines.append(f'  {pdf_path}')
         else:
             lines.append('PDF: no bodies to draw, so no PDF was written.')
@@ -256,13 +256,10 @@ def _run_export(design, candidates, folder):
     if _settings['csv']:
         csv_path = os.path.join(folder, f'{safe_name}_cut_sheet.csv')
 
-        def note_for(info):
-            if body_utils.identity_key(info) in drawn_keys:
-                return csv_export.NOTE_SEE_PDF
-            return csv_export.NOTE_SEE_DESIGN
-
         try:
-            count, complex_count = csv_export.write(csv_path, measured, fmt, note_for)
+            count, complex_count = csv_export.write(
+                csv_path, measured, fmt, lambda info: _note_for(info, drawn_keys)
+            )
             written.append(csv_path)
             lines.append(f'CSV: {count} bodies ({complex_count} complex shapes noted)')
             lines.append(f'  {csv_path}')
@@ -299,6 +296,32 @@ def _run_export(design, candidates, folder):
         )
 
 
+def _part_home_frame(design):
+    """Home axes for part pages, or None when the design has no ViewCube to read."""
+    if design is None:
+        return None
+    try:
+        return body_utils.part_home_frame(design)
+    except Exception:
+        futil.log(
+            f'Export Cut Sheet: could not read the Home view, using the standard isometric\n{traceback.format_exc()}',
+            adsk.core.LogLevels.WarningLogLevel,
+        )
+        return None
+
+
+def _home_view(info, frame):
+    """Shaded home view of one part. A failure still leaves the orthographic views."""
+    try:
+        return body_utils.extract_home_view(info, frame)
+    except Exception:
+        futil.log(
+            f'Export Cut Sheet: could not shade the home view of {info.name}\n{traceback.format_exc()}',
+            adsk.core.LogLevels.WarningLogLevel,
+        )
+        return None
+
+
 def _view_frame(design):
     try:
         return body_utils.view_frame(design)
@@ -329,19 +352,22 @@ def _build_overview(design, candidates, doc_name, failed):
         _hide_progress(progress)
 
 
-def _write_pdf(path, infos, doc_name, fmt, overview=None):
+def _write_pdf(path, infos, doc_name, fmt, overview=None, design=None):
     groups = sorted(
         body_utils.group_identical(infos),
         key=lambda group: (group[0].name.lower(), group[0].name),
     )
     failed = []
     sheets = []
+    home_frame = _part_home_frame(design)
     progress = _show_progress('Drawing parts', len(groups))
     try:
         for index, (info, quantity) in enumerate(groups):
             _advance_progress(progress, f'Drawing {info.name}', index)
             try:
-                sheets.append((body_utils.extract_views(info), info, quantity))
+                views = body_utils.extract_views(info)
+                home = _home_view(info, home_frame)
+                sheets.append((views, home, info, quantity))
             except Exception:
                 failed.append((info.name, 'could not be drawn'))
                 futil.log(
@@ -355,6 +381,11 @@ def _write_pdf(path, infos, doc_name, fmt, overview=None):
         return 0, failed, set()
 
     date_text = datetime.date.today().isoformat()
+    drawn_keys = {body_utils.identity_key(info) for _views, _home, info, _quantity in sheets}
+    table = (
+        csv_export.HEADER,
+        list(csv_export.rows(infos, fmt, lambda info: _note_for(info, drawn_keys))),
+    )
     parts = [
         drawing.PartSheet(
             views=views,
@@ -364,18 +395,25 @@ def _write_pdf(path, infos, doc_name, fmt, overview=None):
             size=info.size,
             quantity=quantity,
             view_size=info.view_size,
+            home=home,
         )
-        for views, info, quantity in sheets
+        for views, home, info, quantity in sheets
     ]
     try:
-        document = drawing.build_document(parts, fmt, _settings['page'], date_text, overview)
+        document = drawing.build_document(parts, fmt, _settings['page'], date_text, overview, table)
         document.save(path)
     except Exception:
         failed.append(('PDF', _short_error()))
         futil.log(f'Export Cut Sheet: PDF failed\n{traceback.format_exc()}', adsk.core.LogLevels.ErrorLogLevel)
         return 0, failed, set()
-    drawn_keys = {body_utils.identity_key(info) for _views, info, _quantity in sheets}
     return len(document.pages), failed, drawn_keys
+
+
+def _note_for(info, drawn_keys):
+    """Same note the CSV uses: the drawing when this body has a page, otherwise the design."""
+    if body_utils.identity_key(info) in drawn_keys:
+        return csv_export.NOTE_SEE_PDF
+    return csv_export.NOTE_SEE_DESIGN
 
 
 def _sync_number_inputs(inputs):

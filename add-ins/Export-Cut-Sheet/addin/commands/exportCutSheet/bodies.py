@@ -310,6 +310,45 @@ def identity_key(info):
     )
 
 
+def part_home_frame(design):
+    """Home-view (right, up, depth) axes in a part's front-aligned drawing frame.
+
+    Uses the design's ViewCube, including a custom Home or Front view.
+    """
+    bases = _overview_bases(design)
+    front_right, front_up = bases['front']
+    home_right, home_up = bases['home']
+    right, up = drawing.home_frame_in_view(front_right, front_up, home_right, home_up)
+    return shading.view_frame(right, up)
+
+
+def extract_home_view(info, frame=None):
+    """Project one body's mesh and edges into the shaded home view.
+
+    Points are in the part's drawing frame, the same frame as `extract_views`.
+    `frame` is a shading view frame; the standard Home view is used when it is omitted.
+    """
+    if frame is None:
+        right, up = drawing.view_basis(*drawing.default_view_directions(True)['home'])
+        frame = shading.view_frame(right, up)
+    scene = shading.SceneView()
+    extents = info.view_size or info.size
+    tolerance = max(max(extents) * 0.001, 0.0005) if extents else 0.0005
+
+    for edge in info.body.edges:
+        points = [to_local(point, info.origin, info.axes) for point in _edge_points(edge, tolerance)]
+        if len(points) < 2:
+            continue
+        projected = [shading.project(point, frame) for point in points]
+        if _span(projected) > 1e-6:
+            scene.edges.append(projected)
+
+    for triangle in _body_triangles(info.body):
+        local = tuple(to_local(point, info.origin, info.axes) for point in triangle)
+        scene.triangles.append(tuple(shading.project(point, frame) for point in local))
+    return scene
+
+
 def extract_views(info):
     """Project every edge of the body into the top, front, and right views."""
     views = drawing.empty_views()

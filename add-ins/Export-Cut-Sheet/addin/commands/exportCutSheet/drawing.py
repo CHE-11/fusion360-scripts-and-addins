@@ -1,8 +1,9 @@
-"""Three-view dimensioned drawings laid out on PDF pages.
+"""Dimensioned part drawings laid out on PDF pages.
 
 Model values are in centimeters, in each body's own frame, with axes lined
 up with Fusion's Front view: x runs right, y runs away from the viewer, and z
 runs up. The origin is the frame's minimum corner. Paper values are PDF points.
+Each part page is a third-angle drawing (top, front, right) plus a shaded home view.
 """
 import math
 from dataclasses import dataclass, field
@@ -68,6 +69,17 @@ LEADER_LENGTH = 18.0
 LEADER_SHOULDER = 6.0
 
 LABEL_GAP = 4.0
+
+# Cut sheet table appended after the drawings. Weights match the CSV columns.
+TABLE_ROW_HEIGHT = 15.0
+TABLE_TEXT_SIZE = 8.0
+TABLE_CAPTION_HEIGHT = 28.0
+TABLE_BOTTOM_PAD = 10.0
+TABLE_CELL_PAD = 4.0
+TABLE_HEADER_FILL = 0.82
+TABLE_STRIPE_FILL = 0.93
+TABLE_WEIGHTS = (2.6, 1.1, 1.1, 1.2, 0.7, 2.8)
+TABLE_ALIGNS = ('left', 'right', 'right', 'right', 'center', 'left')
 MIN_STATION_GAP_PT = 10.0
 MAX_STATIONS = 14
 MIN_ANGLE_DEG = 0.5
@@ -103,6 +115,8 @@ class PartSheet:
     quantity: int = 1
     # Extents along the view frame's x, y, z. Defaults to `size`.
     view_size: tuple = None
+    # Shaded home view (shading.SceneView) in this part's drawing frame, or None.
+    home: object = None
 
 
 @dataclass
@@ -169,6 +183,25 @@ def view_basis(direction, up):
     along = _dot(up, d)
     paper_up = _normalize(tuple(up[i] - along * d[i] for i in range(3)))
     return _cross(d, paper_up), paper_up
+
+
+def home_frame_in_view(front_right, front_up, home_right, home_up):
+    """Home camera axes in the front view's drawing frame.
+
+    All four vectors are paper axes in the same model space. Returns paper
+    (right, up) for the home view once a part has been squared up to Front,
+    so a custom Home stays the same angle relative to Front as on the cover.
+    """
+    front_depth = _cross(front_up, front_right)
+
+    def into(vector):
+        return (
+            _dot(vector, front_right),
+            _dot(vector, front_depth),
+            _dot(vector, front_up),
+        )
+
+    return _normalize(into(home_right)), _normalize(into(home_up))
 
 
 def project_onto(point, basis):
@@ -272,18 +305,28 @@ def standard_scale(raw_points_per_cm):
     return PT_PER_CM * best, f'{_ratio_text(best)}:1'
 
 
-def layout_views(size, area):
+def layout_views(size, area, home_extent=None):
     """Fit the third-angle layout (top above front, right beside front) into `area`.
 
-    `area` is (x, y, width, height) in points. Returns a Layout with one box per view.
+    `area` is (x, y, width, height) in points. `size` is (x, y, z) in centimeters.
+    `home_extent` is the home view's (width, height) in centimeters. When it is
+    given, Home sits in the top-right cell and the sheet scales to fit it.
+    The top view stays level with the top of that cell, so its dimensions sit
+    above the home view. Returns a Layout with one box per view.
     """
-    length, width, thickness = (max(value, 0.0) for value in size)
+    length, depth, height = (max(value, 0.0) for value in size)
+    home_w = home_h = 0.0
+    if home_extent:
+        home_w, home_h = (max(value, 0.0) for value in home_extent)
+    has_home = home_w > 0.0 and home_h > 0.0
+    col_right = max(depth, home_w)
+    row_top = max(depth, home_h)
     area_x, area_y, area_w, area_h = area
     fixed_w = LEFT_MARGIN + VIEW_GAP + RIGHT_MARGIN
     fixed_h = BOTTOM_MARGIN + VIEW_GAP + TOP_MARGIN
 
-    model_w = length + width
-    model_h = width + thickness
+    model_w = length + col_right
+    model_h = height + row_top
     if model_w <= 0 or model_h <= 0:
         raise ValueError('part has no measurable size')
 
@@ -297,10 +340,24 @@ def layout_views(size, area):
     left = area_x + (area_w - total_w) / 2.0
     bottom = area_y + (area_h - total_h) / 2.0
 
-    front = ViewBox('front', left + LEFT_MARGIN, bottom + BOTTOM_MARGIN, scale * length, scale * thickness)
-    top = ViewBox('top', front.x, front.y + front.height + VIEW_GAP, scale * length, scale * width)
-    right = ViewBox('right', front.x + front.width + VIEW_GAP, front.y, scale * width, scale * thickness)
-    return Layout(scale, label, {'front': front, 'top': top, 'right': right})
+    front = ViewBox('front', left + LEFT_MARGIN, bottom + BOTTOM_MARGIN, scale * length, scale * height)
+    top_row_bottom = front.y + front.height + VIEW_GAP
+    top = ViewBox(
+        'top', front.x, top_row_bottom + scale * (row_top - depth), scale * length, scale * depth
+    )
+    right = ViewBox('right', front.x + front.width + VIEW_GAP, front.y, scale * depth, scale * height)
+    boxes = {'front': front, 'top': top, 'right': right}
+    if has_home:
+        cell_w, cell_h = scale * col_right, scale * row_top
+        box_w, box_h = scale * home_w, scale * home_h
+        boxes['home'] = ViewBox(
+            'home',
+            right.x + (cell_w - box_w) / 2.0,
+            top_row_bottom + (cell_h - box_h) / 2.0,
+            box_w,
+            box_h,
+        )
+    return Layout(scale, label, boxes)
 
 
 def layout_overview(extents, area):
@@ -467,15 +524,20 @@ def angled_lines(lines, min_length):
     return found[:MAX_ANGLES_PER_VIEW]
 
 
-def build_document(parts, fmt, page_name, date_text, overview=None):
-    """One page per part, preceded by the model overview when one is given."""
+def build_document(parts, fmt, page_name, date_text, overview=None, table=None):
+    """One page per part, the model overview first, and the cut sheet table last.
+
+    `table` is `(header, rows)` with the same columns and values as the CSV.
+    """
     page_w, page_h = PAGE_SIZES[page_name]
+    header, table_rows = _table_contents(table)
     if overview is not None:
         title = overview.document_name
     else:
         title = parts[0].document_name if parts else 'Drawings'
     document = PdfDocument(f'{title} drawings')
-    sheet_count = len(parts) + (1 if overview is not None else 0)
+    table_pages = _table_page_count(page_h, len(table_rows))
+    sheet_count = len(parts) + (1 if overview is not None else 0) + table_pages
     sheet = 1
     if overview is not None:
         draw_overview(document.add_page(page_w, page_h), overview, fmt, date_text, sheet, sheet_count)
@@ -483,7 +545,139 @@ def build_document(parts, fmt, page_name, date_text, overview=None):
     for part in parts:
         draw_part(document.add_page(page_w, page_h), part, fmt, date_text, sheet, sheet_count)
         sheet += 1
+    if table_pages:
+        _draw_table_pages(
+            document, header, table_rows, page_w, page_h, title, date_text, sheet, sheet_count
+        )
     return document
+
+
+def _table_contents(table):
+    if not table:
+        return (), ()
+    header, rows = table
+    rows = [tuple(row) for row in rows]
+    if not rows:
+        return (), ()
+    return tuple(str(cell) for cell in header), rows
+
+
+def _table_body_rows(page_h):
+    """How many data rows fit under the repeated header on one landscape page."""
+    span = page_h - 2 * BORDER_MARGIN - TABLE_CAPTION_HEIGHT - TABLE_BOTTOM_PAD
+    slots = int(span // TABLE_ROW_HEIGHT)
+    return max(slots - 1, 1)
+
+
+def _table_page_count(page_h, row_count):
+    if row_count <= 0:
+        return 0
+    return math.ceil(row_count / _table_body_rows(page_h))
+
+
+def _draw_table_pages(document, header, rows, page_w, page_h, document_name, date_text, sheet, sheet_count):
+    body_rows = _table_body_rows(page_h)
+    start = 0
+    while start < len(rows):
+        chunk = rows[start:start + body_rows]
+        page = document.add_page(page_w, page_h)
+        _draw_table_page(page, header, chunk, start, document_name, date_text, sheet, sheet_count)
+        start += body_rows
+        sheet += 1
+
+
+def _draw_table_page(page, header, rows, start, document_name, date_text, sheet, sheet_count):
+    x, y, width, height = _content_border(page)
+    _draw_table_caption(page, x, y + height, width, document_name, date_text, sheet, sheet_count)
+
+    table_left = x + 8.0
+    table_width = width - 16.0
+    table_top = y + height - TABLE_CAPTION_HEIGHT
+    columns = _table_columns(header, table_width)
+    grid_height = (1 + len(rows)) * TABLE_ROW_HEIGHT
+    grid_bottom = table_top - grid_height
+
+    page.fill_rect(table_left, table_top - TABLE_ROW_HEIGHT, table_width, TABLE_ROW_HEIGHT, TABLE_HEADER_FILL)
+    for local in range(len(rows)):
+        if (start + local) % 2 == 1:
+            row_bottom = table_top - (local + 2) * TABLE_ROW_HEIGHT
+            page.fill_rect(table_left, row_bottom, table_width, TABLE_ROW_HEIGHT, TABLE_STRIPE_FILL)
+
+    _draw_table_row(page, table_left, table_top - TABLE_ROW_HEIGHT, columns, header, bold=True)
+    for local, row in enumerate(rows):
+        row_bottom = table_top - (local + 2) * TABLE_ROW_HEIGHT
+        _draw_table_row(page, table_left, row_bottom, columns, row, bold=False)
+    _draw_table_grid(page, table_left, grid_bottom, table_width, grid_height, columns, len(rows))
+
+
+def _content_border(page):
+    x = BORDER_MARGIN
+    y = BORDER_MARGIN
+    width = page.width - 2 * BORDER_MARGIN
+    height = page.height - 2 * BORDER_MARGIN
+    page.rect(x, y, width, height, 1.0)
+    return x, y, width, height
+
+
+def _draw_table_caption(page, x, top, width, document_name, date_text, sheet, sheet_count):
+    baseline = top - 18.0
+    page.text(x + 8.0, baseline, 'CUT SHEET', 11, bold=True)
+    sheet_text = f'{sheet} / {sheet_count}'
+    page.text(x + width - 8.0, baseline, sheet_text, 9, align='right')
+    date_right = x + width - 8.0 - text_width(sheet_text, 9) - 14.0
+    page.text(date_right, baseline, date_text, 9, align='right')
+    name_left = x + 8.0 + text_width('CUT SHEET', 11, bold=True) + 14.0
+    name_width = date_right - text_width(date_text, 9) - 12.0 - name_left
+    if name_width > 20.0:
+        size, fitted = fit_text(document_name, name_width, 9.0, 7.0)
+        page.text(name_left, baseline, fitted, size)
+
+
+def _table_columns(header, width):
+    count = len(header)
+    if count == len(TABLE_WEIGHTS):
+        weights, aligns = TABLE_WEIGHTS, TABLE_ALIGNS
+    else:
+        weights, aligns = (1.0,) * count, ('left',) * count
+    total = sum(weights) or 1.0
+    return [
+        (label, width * weight / total, align)
+        for label, weight, align in zip(header, weights, aligns)
+    ]
+
+
+def _draw_table_row(page, x, row_bottom, columns, values, bold):
+    baseline = row_bottom + (TABLE_ROW_HEIGHT - TABLE_TEXT_SIZE * 0.72) / 2.0
+    cursor = x
+    for (_label, col_w, align), value in zip(columns, values):
+        _cell_text(page, cursor, baseline, col_w, '' if value is None else str(value), bold, align)
+        cursor += col_w
+
+
+def _cell_text(page, x, baseline, width, text, bold, align):
+    available = width - 2 * TABLE_CELL_PAD
+    if available <= 0:
+        return
+    size, fitted = fit_text(text, available, TABLE_TEXT_SIZE, TABLE_TEXT_SIZE, bold=bold)
+    if align == 'right':
+        page.text(x + width - TABLE_CELL_PAD, baseline, fitted, size, bold=bold, align='right')
+    elif align == 'center':
+        page.text(x + width / 2.0, baseline, fitted, size, bold=bold, align='center')
+    else:
+        page.text(x + TABLE_CELL_PAD, baseline, fitted, size, bold=bold)
+
+
+def _draw_table_grid(page, x, y, width, height, columns, data_rows):
+    page.rect(x, y, width, height, 0.7)
+    cursor = x
+    for _label, col_w, _align in columns[:-1]:
+        cursor += col_w
+        page.line(cursor, y, cursor, y + height, 0.3)
+    for index in range(1, data_rows):
+        line_y = y + index * TABLE_ROW_HEIGHT
+        page.line(x, line_y, x + width, line_y, 0.3)
+    header_y = y + data_rows * TABLE_ROW_HEIGHT
+    page.line(x, header_y, x + width, header_y, 0.8)
 
 
 def _page_frame(page):
@@ -516,13 +710,7 @@ def draw_overview(page, overview, fmt, date_text, sheet, sheet_count):
     for name in OVERVIEW_VIEWS:
         box = layout.boxes[name]
         if bounds[name]:
-            raster, edges = shading.render(overview.views[name], bounds[name], layout.scale)
-            page.image(
-                box.x, box.y + box.height - raster.height_pt, raster.width_pt, raster.height_pt,
-                raster.width, raster.height, raster.pixels, shading.PALETTE,
-            )
-            for run in edges:
-                page.polyline([(box.x + x, box.y + y) for x, y in run], OVERVIEW_LINE_WIDTH)
+            _draw_shaded_view(page, box, overview.views[name], bounds[name], layout.scale)
         page.text(box.x + box.width / 2.0, box.y + box.height + 8.0, OVERVIEW_LABELS[name], 7, bold=True, align='center')
 
     width, height = extents['front']
@@ -551,11 +739,19 @@ def draw_overview(page, overview, fmt, date_text, sheet, sheet_count):
 def draw_part(page, part, fmt, date_text, sheet, sheet_count):
     area, title_rect = _page_frame(page)
     view_size = part.view_size or part.size
-    layout = layout_views(view_size, area)
+    home_bounds = shading.scene_bounds(part.home)
+    home_extent = None
+    if home_bounds:
+        home_extent = (home_bounds[2] - home_bounds[0], home_bounds[3] - home_bounds[1])
+    layout = layout_views(view_size, area, home_extent)
     views = {name: part.views.get(name) or ViewData() for name in VIEW_AXES}
 
     for name, box in layout.boxes.items():
+        if name == 'home':
+            continue
         _draw_view(page, box, views[name], layout.scale, fmt)
+    if home_bounds and 'home' in layout.boxes:
+        _draw_shaded_view(page, layout.boxes['home'], part.home, home_bounds, layout.scale)
 
     _draw_dimensions(page, layout, views, view_size, fmt)
     _draw_view_labels(page, layout.boxes)
@@ -569,6 +765,17 @@ def draw_part(page, part, fmt, date_text, sheet, sheet_count):
         sheet,
         sheet_count,
     )
+
+
+def _draw_shaded_view(page, box, view, bounds, scale):
+    """Shaded faces with visible edges over them, matching the cover page."""
+    raster, edges = shading.render(view, bounds, scale)
+    page.image(
+        box.x, box.y + box.height - raster.height_pt, raster.width_pt, raster.height_pt,
+        raster.width, raster.height, raster.pixels, shading.PALETTE,
+    )
+    for run in edges:
+        page.polyline([(box.x + x, box.y + y) for x, y in run], OVERVIEW_LINE_WIDTH)
 
 
 def _draw_view(page, box, view, scale, fmt):
@@ -828,6 +1035,9 @@ def _draw_view_labels(page, boxes):
     page.text(front.x + front.width, front.y + front.height + 6.0, 'FRONT', 7, bold=True, align='right')
     page.text(right.x, right.y + right.height + 6.0, 'RIGHT', 7, bold=True)
     page.text(top.x + top.width, top.y - 12.0, 'TOP', 7, bold=True, align='right')
+    home = boxes.get('home')
+    if home is not None:
+        page.text(home.x + home.width / 2.0, home.y + home.height + 8.0, 'HOME', 7, bold=True, align='center')
 
 
 def _draw_title_block(page, rect, part, fmt, scale_label, date_text, sheet, sheet_count):

@@ -239,6 +239,25 @@ class LayoutTests(unittest.TestCase):
         self.assertLessEqual(top.y + top.height + drawing.TOP_MARGIN, area[1] + area[3] + 1e-6)
         self.assertAlmostEqual(top.width, layout.scale * 120.0)
 
+    def test_home_view_joins_the_part_layout(self):
+        area = (50.0, 80.0, 700.0, 450.0)
+        layout = drawing.layout_views((120.0, 40.0, 30.0), area, (80.0, 70.0))
+        front, top, right, home = (layout.boxes[name] for name in ('front', 'top', 'right', 'home'))
+        self.assertAlmostEqual(front.x, top.x)
+        self.assertAlmostEqual(front.y, right.y)
+        self.assertGreater(home.x, top.x + top.width)
+        self.assertAlmostEqual(home.x, right.x)
+        self.assertAlmostEqual(home.y + home.height, top.y + top.height)
+        self.assertGreater(home.y, right.y + right.height)
+        self.assertAlmostEqual(home.width, layout.scale * 80.0)
+        self.assertAlmostEqual(home.height, layout.scale * 70.0)
+        self.assertAlmostEqual(front.width, layout.scale * 120.0)
+        outer_right = max(home.x + home.width, right.x + right.width)
+        outer_top = max(home.y + home.height, top.y + top.height)
+        self.assertGreaterEqual(front.x - drawing.LEFT_MARGIN, area[0] - 1e-6)
+        self.assertLessEqual(outer_right + drawing.RIGHT_MARGIN, area[0] + area[2] + 1e-6)
+        self.assertLessEqual(outer_top + drawing.TOP_MARGIN, area[1] + area[3] + 1e-6)
+
     def test_zero_size_raises(self):
         with self.assertRaises(ValueError):
             drawing.layout_views((0.0, 0.0, 0.0), (0, 0, 500, 500))
@@ -287,6 +306,16 @@ class OverviewProjectionTests(unittest.TestCase):
         self.assertGreater(right[1], 0)
         self.assertAlmostEqual(right[2], 0.0)
         self.assertGreater(up[2], 0)
+
+    def test_home_frame_follows_the_front_view(self):
+        directions = drawing.default_view_directions(z_up=True)
+        front = drawing.view_basis(*directions['front'])
+        home = drawing.view_basis(*directions['home'])
+        right, up = drawing.home_frame_in_view(front[0], front[1], home[0], home[1])
+        for got, expected in zip(right, home[0]):
+            self.assertAlmostEqual(got, expected, places=6)
+        for got, expected in zip(up, home[1]):
+            self.assertAlmostEqual(got, expected, places=6)
 
     def test_parallel_up_raises(self):
         with self.assertRaises(ValueError):
@@ -484,6 +513,21 @@ class PdfTests(unittest.TestCase):
         for number, offset in enumerate(entries, start=1):
             self.assertTrue(data[int(offset):].startswith(f'{number} 0 obj'.encode()))
 
+    def test_part_page_shades_the_home_view(self):
+        part = notched_taper_part()
+        part.home = box_scene((0, 0, 0), (40, 20, 1.2))['home']
+        document = drawing.build_document([part], CM_1, 'Letter', '2026-11-23')
+        page = document.pages[0]
+        content = page.content().decode('ascii')
+        self.assertIn('(HOME)', content)
+        self.assertIn('(FRONT)', content)
+        self.assertIn('(TOP)', content)
+        self.assertIn('(RIGHT)', content)
+        self.assertEqual(len(page.images), 1)
+        self.assertIn('/Im1 Do', content)
+        # Orthographic dimensions stay on the page with the shaded view.
+        self.assertIn('(40.0)', content)
+
     def test_page_content_has_feature_dimensions(self):
         document = drawing.build_document([notched_taper_part()], INCHES, 'A4', '2026-11-22')
         content = document.pages[0].content().decode('ascii')
@@ -519,6 +563,62 @@ class PdfTests(unittest.TestCase):
         self.assertIn(b'/Count 2', data)
         self.assertIn(b'/Subtype /Image', data)
         self.assertIn(b'/XObject << /Im1', data)
+
+    def test_cut_sheet_table_matches_the_csv(self):
+        infos = [
+            Info('Shelf', (60.96, 30.48, 1.905)),
+            Info('back', (91.44, 60.96, 0.635), is_rectangle=False),
+        ]
+        fmt = drawing.LengthFormat('in', 3, 8)
+        table_rows = list(csv_export.rows(infos, fmt, lambda info: csv_export.NOTE_SEE_PDF))
+        document = drawing.build_document(
+            [notched_taper_part()], fmt, 'Letter', '2026-11-23', table=(csv_export.HEADER, table_rows)
+        )
+        self.assertEqual(len(document.pages), 2)
+        drawing_page = document.pages[0].content().decode('ascii')
+        table_page = document.pages[1].content().decode('ascii')
+        self.assertIn('(1 / 2)', drawing_page)
+        self.assertIn('(2 / 2)', table_page)
+        self.assertIn('(CUT SHEET)', table_page)
+        self.assertIn('(back)', table_page)
+        self.assertIn('(Shelf)', table_page)
+        self.assertIn('(0 3/4)', table_page)
+        self.assertIn('(0 1/4)', table_page)
+        self.assertIn('(Complex Shape - see PDF drawing)', table_page)
+        for label in csv_export.HEADER:
+            line = next(line for line in table_page.split('\n') if f'({label})' in line)
+            self.assertIn('/F2', line)
+        body_line = next(line for line in table_page.split('\n') if '(back)' in line)
+        self.assertIn('/F1', body_line)
+        self.assertNotIn('/F2', body_line)
+        # Header band, then a highlight on the second data row only.
+        self.assertIn('0.82 g', table_page)
+        self.assertEqual(table_page.count('0.93 g'), 1)
+
+    def test_empty_table_adds_no_page(self):
+        document = drawing.build_document(
+            [notched_taper_part()], MM_1, 'Letter', '2026-11-23', table=(csv_export.HEADER, [])
+        )
+        self.assertEqual(len(document.pages), 1)
+
+    def test_cut_sheet_table_continues_with_the_header(self):
+        capacity = drawing._table_body_rows(drawing.PAGE_SIZES['Letter'][1])
+        rows = [(f'Part {index:03d}', '10', '5', '1', 'mm', '') for index in range(capacity + 1)]
+        document = drawing.build_document(
+            [notched_taper_part()], MM_1, 'Letter', '2026-11-23', table=(csv_export.HEADER, rows)
+        )
+        self.assertEqual(len(document.pages), 3)
+        first = document.pages[1].content().decode('ascii')
+        second = document.pages[2].content().decode('ascii')
+        self.assertIn('(2 / 3)', first)
+        self.assertIn('(3 / 3)', second)
+        for page in (first, second):
+            line = next(line for line in page.split('\n') if '(Body Name)' in line)
+            self.assertIn('/F2', line)
+        self.assertIn('(Part 000)', first)
+        self.assertNotIn(f'(Part {capacity:03d})', first)
+        self.assertIn(f'(Part {capacity:03d})', second)
+        self.assertEqual(first.count('0.93 g'), capacity // 2)
 
     def test_save(self):
         document = drawing.build_document([notched_taper_part()], MM_1, 'Tabloid', '2026-11-22')

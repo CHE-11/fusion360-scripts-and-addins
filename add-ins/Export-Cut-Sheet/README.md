@@ -3,7 +3,7 @@
 Export Cut Sheet adds an **Export Cut Sheet** button to the CHE panel on the Design workspace **Solid** tab. It exports the bodies in the current design in two forms:
 
 - **CSV**: one row per body with `Body Name, Length, Width, Thickness, Units, Note`. Rectangular bodies have an empty note. Complex bodies list their overall outline size and the note `Complex Shape - see PDF drawing`, or `Complex Shape - see design file` when no PDF page was made for them. Open it in Excel or feed it to a panel optimizer.
-- **PDF**: a model overview on the first page, then one page per part with a dimensioned three-view drawing (top, front, right in third-angle projection) and a title block. Rectangular and complex parts are both included.
+- **PDF**: a model overview on the first page, then one page per part with a dimensioned three-view drawing (top, front, right in third-angle projection), a shaded home view, and a title block. The PDF ends with a cut sheet table that matches the CSV. Rectangular and complex parts are both included.
 
 ## Install
 
@@ -30,7 +30,7 @@ Each body is measured in its own minimum oriented bounding box. Parts rotated in
 
 A body counts as a rectangle when it has exactly six planar faces whose normals form three perpendicular pairs, and its volume matches its bounding box. Everything else, such as notches, holes, chamfers, or curves, is noted as a complex shape in the CSV. Both kinds of body are drawn in the PDF.
 
-Each placement of a component is a separate CSV row. In the PDF, repeated instances of the same body are drawn once, with the count in the **QTY** cell.
+Each placement of a component is a separate CSV row and a separate row in the PDF table. In the drawings, repeated instances of the same body are drawn once, with the count in the **QTY** cell.
 
 ## Drawings
 
@@ -39,13 +39,16 @@ The first page shows every visible body in the design as one model, even when on
 Part pages follow in order of body name. Each part page:
 
 - Top, Front, and Right show the part the way Fusion's ViewCube shows it, so a panel standing upright is drawn upright, seen from the front. A part placed at an angle is squared up to the nearest view, so its dimensions stay true size. The **SIZE** cell still lists length, width, and thickness.
+- A shaded **Home** view of that part sits in the top-right, drawn the same way as the cover: hidden lines removed, faces shaded, and visible edges drawn as sharp lines over the shading. It uses the design's Home view relative to Front, including a custom Home.
 - Each view gets overall horizontal and vertical dimensions.
 - Feature dimensions run as a chain inside the overall dimensions. They mark where notches, steps, and angled edges start and end, and where hole centers sit, along the length, width, and thickness. Each chain is drawn once, on the top view for length and width and on the front view for thickness. Positions closer together than about 10 points on paper are merged so the chain stays readable.
 - Straight edges that are not horizontal or vertical get an angle dimension, measured from the nearest horizontal or vertical reference, for example `15.3°`.
 - Circular edges seen face-on get center marks and a diameter callout. Equal diameters are grouped, for example `4X Ø 0.250`. Holes that Fusion stores as two half arcs are recognized as full circles.
 - Fillets and rounded ends seen face-on get a radius callout, grouped the same way, for example `2X R 0.500`.
 - The scale snaps to a standard ratio (such as 1:2 or 1:10) and is printed in the title block.
-- Part views are wireframe projections. Hidden edges are drawn as solid lines, not dashed.
+- Top, Front, and Right are wireframe projections. Hidden edges are drawn as solid lines, not dashed. Home is the shaded view.
+
+The last pages are the cut sheet table. It has the same columns, values, order, and notes as the CSV. The header row is bold on a gray band and repeats at the top of each table page. Data rows alternate between white and a light gray highlight.
 
 The PDF is written by the add-in itself, because Fusion's API cannot create drawing views. Nothing extra needs installing.
 
