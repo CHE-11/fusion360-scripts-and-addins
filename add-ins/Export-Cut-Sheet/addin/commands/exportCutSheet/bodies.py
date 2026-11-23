@@ -1,3 +1,4 @@
+import itertools
 import math
 from dataclasses import dataclass, field
 
@@ -5,6 +6,7 @@ import adsk.core
 import adsk.fusion
 
 from . import drawing
+from . import shading
 
 UNIT_FACTORS = drawing.UNIT_FACTORS
 UNIT_CHOICES = tuple(UNIT_FACTORS)
@@ -27,11 +29,15 @@ class BodyInfo:
     name: str
     component_name: str
     body: object
+    # Drawing frame: minimum corner and (right, depth, up) axes as Fusion's Front view shows them.
     origin: tuple
     axes: tuple
+    # Length >= width >= thickness.
     size: tuple
     is_rectangle: bool
     token: str = field(default='')
+    # Extents along the drawing frame axes.
+    view_size: tuple = None
 
 
 def collect(design, selected=None):
@@ -76,26 +82,50 @@ def collect(design, selected=None):
 
 
 def extract_overview(design, candidates):
-    """Project every candidate's edges, in root space, into the home, top, front, and right views.
+    """Project every candidate's mesh and edges, in root space, into the home, top, front, and right views.
 
-    Returns {view name: [polyline of (u, v)]}, oriented like Fusion's ViewCube.
+    Returns {view name: shading.SceneView}, oriented like Fusion's ViewCube.
     """
-    bases = _overview_bases(design)
-    views = {name: [] for name in bases}
+    frames = {name: shading.view_frame(*basis) for name, basis in _overview_bases(design).items()}
+    views = {name: shading.SceneView() for name in frames}
     for candidate in candidates:
         matrix = _matrix_values(candidate.transform)
+
+        def place(points):
+            return [transform_point(matrix, point) for point in points] if matrix else points
+
         tolerance = _stroke_tolerance(candidate.body)
         for edge in candidate.body.edges:
             points = _edge_points(edge, tolerance)
             if len(points) < 2:
                 continue
-            if matrix:
-                points = [transform_point(matrix, point) for point in points]
-            for name, basis in bases.items():
-                projected = [drawing.project_onto(point, basis) for point in points]
+            points = place(points)
+            for name, frame in frames.items():
+                projected = [shading.project(point, frame) for point in points]
                 if _span(projected) > 1e-6:
-                    views[name].append(projected)
+                    views[name].edges.append(projected)
+
+        for triangle in _body_triangles(candidate.body):
+            triangle = place(triangle)
+            for name, frame in frames.items():
+                views[name].triangles.append(tuple(shading.project(point, frame) for point in triangle))
     return views
+
+
+def _body_triangles(body):
+    try:
+        calculator = body.meshManager.createMeshCalculator()
+        calculator.setQuality(adsk.fusion.TriangleMeshQualityOptions.NormalQualityTriangleMesh)
+        mesh = calculator.calculate()
+        coords = mesh.nodeCoordinatesAsDouble
+        indices = mesh.nodeIndices
+    except Exception:
+        return []
+    nodes = [(coords[i], coords[i + 1], coords[i + 2]) for i in range(0, len(coords) - 2, 3)]
+    return [
+        (nodes[indices[i]], nodes[indices[i + 1]], nodes[indices[i + 2]])
+        for i in range(0, len(indices) - 2, 3)
+    ]
 
 
 def transform_point(matrix, point):
@@ -185,10 +215,16 @@ def _stroke_tolerance(body):
         return 0.01
 
 
-def measure(candidate):
+def measure(candidate, view_frame=None):
+    """Measure a body. `view_frame` is the root-space (right, depth, up) of Fusion's Front view."""
     body = candidate.body
-    center, axes, extents = _bounding_frame(body)
-    center, axes, extents = sort_frame(center, axes, extents)
+    center, box_axes, box_extents = _bounding_frame(body)
+    _center, sorted_axes, sorted_extents = sort_frame(center, box_axes, box_extents)
+    if view_frame is None:
+        axes, extents = sorted_axes, sorted_extents
+    else:
+        target = _to_body_space(view_frame, _matrix_values(candidate.transform))
+        axes, extents = align_frame(box_axes, box_extents, target)
     origin = tuple(
         center[i] - sum(axes[k][i] * extents[k] / 2.0 for k in range(3)) for i in range(3)
     )
@@ -198,10 +234,58 @@ def measure(candidate):
         body=body,
         origin=origin,
         axes=axes,
-        size=extents,
-        is_rectangle=_is_rectangular_body(body, extents),
+        size=sorted_extents,
+        is_rectangle=_is_rectangular_body(body, sorted_extents),
         token=_token(body),
+        view_size=extents,
     )
+
+
+def view_frame(design):
+    """Root-space (right, depth, up) unit axes of the design's Front view."""
+    right, up = _overview_bases(design)['front']
+    return right, cross(up, right), up
+
+
+def align_frame(axes, extents, target):
+    """Reorder and flip box axes to follow `target` (right, depth, up) as closely as possible.
+
+    Returns right-handed (axes, extents) so a part is drawn the way Fusion shows
+    it, squared up to the nearest view when it sits at an angle.
+    """
+    axes = [normalize(axis) for axis in axes]
+    best_score, best = -1.0, (0, 1, 2)
+    for order in itertools.permutations(range(3)):
+        score = sum(abs(dot(axes[order[k]], target[k])) for k in range(3))
+        if score > best_score + 1e-9:
+            best_score, best = score, order
+    right = axes[best[0]]
+    if dot(right, target[0]) < 0:
+        right = _negate(right)
+    up = axes[best[2]]
+    if dot(up, target[2]) < 0:
+        up = _negate(up)
+    depth = cross(up, right)
+    return (right, depth, up), (extents[best[0]], extents[best[1]], extents[best[2]])
+
+
+def _to_body_space(frame, matrix):
+    """Rotate root-space directions into the native body's component space."""
+    if not matrix:
+        return frame
+    m = matrix
+    return tuple(
+        normalize((
+            m[0] * v[0] + m[4] * v[1] + m[8] * v[2],
+            m[1] * v[0] + m[5] * v[1] + m[9] * v[2],
+            m[2] * v[0] + m[6] * v[1] + m[10] * v[2],
+        ))
+        for v in frame
+    )
+
+
+def _negate(vector):
+    return (-vector[0], -vector[1], -vector[2])
 
 
 def group_identical(infos):

@@ -37,6 +37,7 @@ def load(name):
 
 
 pdf_writer = load('pdf_writer')
+shading = load('shading')
 drawing = load('drawing')
 bodies = load('bodies')
 csv_export = load('csv_export')
@@ -86,6 +87,34 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(axes[1], (0.0, 0.0, 1.0))
         cross = bodies.cross(axes[0], axes[1])
         self.assertAlmostEqual(bodies.dot(cross, axes[2]), 1.0)
+
+    def test_align_frame_matches_front_view(self):
+        # Upright panel facing the front, as Fusion's bounding box might report it.
+        box_axes = ((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        box_extents = (118.7, 45.1, 1.9)
+        front = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        axes, extents = bodies.align_frame(box_axes, box_extents, front)
+        self.assertEqual(axes, front)
+        self.assertEqual(extents, (45.1, 1.9, 118.7))
+
+    def test_align_frame_squares_up_rotated_part_and_stays_right_handed(self):
+        # Flat board turned 120 degrees about Z, thickness up, box axes reported upside down.
+        c, s = -0.5, 3 ** 0.5 / 2
+        box_axes = ((c, s, 0.0), (-s, c, 0.0), (0.0, 0.0, -1.0))
+        front = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        axes, extents = bodies.align_frame(box_axes, (30.0, 20.0, 2.0), front)
+        self.assertAlmostEqual(bodies.dot(bodies.cross(axes[0], axes[1]), axes[2]), 1.0)
+        self.assertGreater(bodies.dot(axes[0], front[0]), 0)
+        self.assertEqual(axes[2], (0.0, 0.0, 1.0))
+        self.assertEqual(extents, (20.0, 30.0, 2.0))
+
+    def test_view_frame_rotates_into_component_space(self):
+        # Component turned 90 degrees about Z: root +X is the component's -Y.
+        matrix = (0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+        frame = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        local = bodies._to_body_space(frame, matrix)
+        self.assertEqual(tuple(round(c, 9) + 0.0 for c in local[0]), (0.0, -1.0, 0.0))
+        self.assertEqual(tuple(round(c, 9) + 0.0 for c in local[2]), (0.0, 0.0, 1.0))
 
     def test_to_local(self):
         axes = ((0, 1, 0), (-1, 0, 0), (0, 0, 1))
@@ -361,6 +390,69 @@ class TextTests(unittest.TestCase):
         self.assertEqual(pdf_writer.escape_text('\u00b0'), '\\260')
 
 
+def box_mesh(low, high):
+    """Triangles and edge polylines of an axis-aligned box in model space."""
+    (x0, y0, z0), (x1, y1, z1) = low, high
+    corners = [(x, y, z) for z in (z0, z1) for y in (y0, y1) for x in (x0, x1)]
+    quads = ((0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5))
+    triangles = []
+    for a, b, c, d in quads:
+        triangles.append((corners[a], corners[b], corners[c]))
+        triangles.append((corners[a], corners[c], corners[d]))
+    pairs = ((0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7))
+    edges = [[corners[a], corners[b]] for a, b in pairs]
+    return triangles, edges
+
+
+def box_scene(low, high):
+    triangles, edges = box_mesh(low, high)
+    views = {}
+    for name, direction in drawing.default_view_directions(z_up=True).items():
+        frame = shading.view_frame(*drawing.view_basis(*direction))
+        views[name] = shading.SceneView(
+            triangles=[tuple(shading.project(p, frame) for p in t) for t in triangles],
+            edges=[[shading.project(p, frame) for p in e] for e in edges],
+        )
+    return views
+
+
+class ShadingTests(unittest.TestCase):
+    def test_hidden_edges_are_removed(self):
+        view = box_scene((0, 0, 0), (40, 20, 10))['home']
+        bounds = shading.scene_bounds(view)
+        _raster, runs = shading.render(view, bounds, 5.0, dpi=100)
+        # A box seen from a corner shows 9 of its 12 edges.
+        self.assertEqual(len(runs), 9)
+
+    def test_faces_are_filled_and_background_stays_white(self):
+        view = box_scene((0, 0, 0), (40, 20, 10))['front']
+        raster, runs = shading.render(view, shading.scene_bounds(view), 5.0, dpi=72)
+        self.assertEqual(raster.width * raster.height, len(raster.pixels))
+        middle = raster.pixels[(raster.height // 2) * raster.width + raster.width // 2]
+        self.assertNotEqual(middle, shading.BACKGROUND)
+        self.assertEqual(len(runs), 4)
+
+    def test_edge_behind_another_body_is_hidden(self):
+        near = box_mesh((0, 0, 0), (40, 2, 40))
+        far_edge = [[(10.0, 20.0, 20.0), (30.0, 20.0, 20.0)]]
+        frame = shading.view_frame(*drawing.view_basis(*drawing.default_view_directions()['front']))
+        view = shading.SceneView(
+            triangles=[tuple(shading.project(p, frame) for p in t) for t in near[0]],
+            edges=[[shading.project(p, frame) for p in e] for e in far_edge],
+        )
+        _raster, runs = shading.render(view, shading.scene_bounds(view), 5.0, dpi=72)
+        self.assertEqual(runs, [])
+
+    def test_pixel_budget_is_respected(self):
+        view = box_scene((0, 0, 0), (400, 200, 100))['top']
+        raster, _runs = shading.render(view, shading.scene_bounds(view), 10.0, dpi=300, max_pixels=50_000)
+        self.assertLessEqual(raster.width * raster.height, 52_000)
+
+    def test_palette_ends_white(self):
+        self.assertEqual(len(shading.PALETTE), 256 * 3)
+        self.assertEqual(shading.PALETTE[-3:], b'\xff\xff\xff')
+
+
 def notched_taper_part():
     """A 40 x 20 x 1.2 plate with a notch, an angled edge, two holes, and a fillet."""
     views = drawing.empty_views()
@@ -410,26 +502,23 @@ class PdfTests(unittest.TestCase):
         self.assertIn('(15 3/4)', content)
         self.assertIn('(in \\(1/16\\))', content)
 
-    def test_overview_is_first_sheet(self):
-        box = [(0, 0, 0), (50, 0, 0), (50, 30, 0), (0, 30, 0), (0, 0, 0)]
-        lid = [(x, y, 20) for x, y, _z in box]
-        bases = {
-            name: drawing.view_basis(*direction)
-            for name, direction in drawing.default_view_directions(z_up=True).items()
-        }
-        views = {
-            name: [[drawing.project_onto(p, basis) for p in loop] for loop in (box, lid)]
-            for name, basis in bases.items()
-        }
+    def test_overview_is_first_sheet_and_shaded(self):
+        views = box_scene((0, 0, 0), (50, 30, 20))
         overview = drawing.OverviewSheet(views, 'Shop Cart', 7)
         document = drawing.build_document([notched_taper_part()], CM_1, 'Letter', '2026-11-23', overview)
         self.assertEqual(len(document.pages), 2)
-        first = document.pages[0].content().decode('ascii')
+        first = document.pages[0]
+        content = first.content().decode('ascii')
         for label in ('(HOME)', '(TOP)', '(FRONT)', '(RIGHT)', '(MODEL OVERVIEW)', '(1 / 2)'):
-            self.assertIn(label, first)
-        self.assertIn('(50.0 x 30.0 x 20.0)', first)
+            self.assertIn(label, content)
+        self.assertIn('(50.0 x 30.0 x 20.0)', content)
+        self.assertEqual(len(first.images), 4)
+        self.assertIn('/Im4 Do', content)
         self.assertIn('(2 / 2)', document.pages[1].content().decode('ascii'))
-        self.assertIn(b'/Count 2', document.to_bytes())
+        data = document.to_bytes()
+        self.assertIn(b'/Count 2', data)
+        self.assertIn(b'/Subtype /Image', data)
+        self.assertIn(b'/XObject << /Im1', data)
 
     def test_save(self):
         document = drawing.build_document([notched_taper_part()], MM_1, 'Tabloid', '2026-11-22')

@@ -222,10 +222,11 @@ def _run_export(design, candidates, folder):
     failed = []
     progress = _show_progress('Measuring bodies', len(candidates))
     try:
+        frame = _view_frame(design)
         for index, candidate in enumerate(candidates):
             _advance_progress(progress, f'Measuring {candidate.name}', index)
             try:
-                measured.append(body_utils.measure(candidate))
+                measured.append(body_utils.measure(candidate, frame))
             except Exception:
                 failed.append((candidate.name, 'could not be measured'))
                 futil.log(
@@ -298,6 +299,17 @@ def _run_export(design, candidates, folder):
         )
 
 
+def _view_frame(design):
+    try:
+        return body_utils.view_frame(design)
+    except Exception:
+        futil.log(
+            f'Export Cut Sheet: could not read the Front view, drawing parts in their own frame\n{traceback.format_exc()}',
+            adsk.core.LogLevels.WarningLogLevel,
+        )
+        return None
+
+
 def _build_overview(design, candidates, doc_name, failed):
     """Overview of every visible body, even when only some bodies were selected."""
     progress = _show_progress('Drawing model overview', 1)
@@ -306,7 +318,7 @@ def _build_overview(design, candidates, doc_name, failed):
         if _settings['scope'] == SCOPE_SELECTED:
             candidates = body_utils.collect(design) or candidates
         views = body_utils.extract_overview(design, candidates)
-        if not any(views.values()):
+        if all(view.is_empty() for view in views.values()):
             return None
         return drawing.OverviewSheet(views=views, document_name=doc_name, body_count=len(candidates))
     except Exception:
@@ -318,7 +330,10 @@ def _build_overview(design, candidates, doc_name, failed):
 
 
 def _write_pdf(path, infos, doc_name, fmt, overview=None):
-    groups = body_utils.group_identical(infos)
+    groups = sorted(
+        body_utils.group_identical(infos),
+        key=lambda group: (group[0].name.lower(), group[0].name),
+    )
     failed = []
     sheets = []
     progress = _show_progress('Drawing parts', len(groups))
@@ -348,6 +363,7 @@ def _write_pdf(path, infos, doc_name, fmt, overview=None):
             document_name=doc_name,
             size=info.size,
             quantity=quantity,
+            view_size=info.view_size,
         )
         for views, info, quantity in sheets
     ]

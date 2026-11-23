@@ -1,4 +1,4 @@
-"""Minimal PDF 1.4 writer: vector lines, filled polygons, and Helvetica text.
+"""Minimal PDF 1.4 writer: vector lines, filled polygons, Helvetica text, and 8-bit images.
 
 Coordinates are PDF points (1/72 inch) with the origin at the bottom-left.
 """
@@ -61,6 +61,7 @@ class Page:
     def __init__(self, width, height):
         self.width = width
         self.height = height
+        self.images = []
         self._ops = []
 
     def line(self, x1, y1, x2, y2, width=0.5, dash=None):
@@ -105,6 +106,14 @@ class Page:
             f'BT /{font} {_num(size)} Tf {_num(cos_a)} {_num(sin_a)} {_num(-sin_a)} {_num(cos_a)} '
             f'{_num(start_x)} {_num(start_y)} Tm ({escape_text(text)}) Tj ET'
         )
+
+    def image(self, x, y, width, height, pixel_width, pixel_height, pixels, palette=None):
+        """Place an 8-bit image, rows top to bottom. With `palette` (RGB bytes) pixels are indices, else gray."""
+        if len(pixels) != pixel_width * pixel_height:
+            raise ValueError('pixel count does not match the image size')
+        name = f'Im{len(self.images) + 1}'
+        self.images.append((name, pixel_width, pixel_height, bytes(pixels), palette))
+        self._ops.append(f'q {_num(width)} 0 0 {_num(height)} {_num(x)} {_num(y)} cm /{name} Do Q')
 
     def content(self):
         return ('\n'.join(self._ops) + '\n').encode('ascii')
@@ -156,11 +165,28 @@ class PdfDocument:
                 + stream
                 + b'\nendstream'
             )
+            xobjects = []
+            for name, pixel_width, pixel_height, pixels, palette in page.images:
+                data = zlib.compress(pixels)
+                if palette:
+                    colorspace = f'[/Indexed /DeviceRGB {len(palette) // 3 - 1} <{palette.hex()}>]'
+                else:
+                    colorspace = '/DeviceGray'
+                image_id = reserve()
+                objects[image_id - 1] = (
+                    f'<< /Type /XObject /Subtype /Image /Width {pixel_width} /Height {pixel_height} '
+                    f'/ColorSpace {colorspace} /BitsPerComponent 8 /Filter /FlateDecode '
+                    f'/Length {len(data)} >>\nstream\n'.encode('ascii')
+                    + data
+                    + b'\nendstream'
+                )
+                xobjects.append(f'/{name} {image_id} 0 R')
+            xobject_text = f' /XObject << {" ".join(xobjects)} >>' if xobjects else ''
             page_id = reserve()
             objects[page_id - 1] = (
                 f'<< /Type /Page /Parent {pages_id} 0 R '
                 f'/MediaBox [0 0 {_num(page.width)} {_num(page.height)}] '
-                f'/Resources << /Font << /{FONT_REGULAR} {regular_id} 0 R /{FONT_BOLD} {bold_id} 0 R >> >> '
+                f'/Resources << /Font << /{FONT_REGULAR} {regular_id} 0 R /{FONT_BOLD} {bold_id} 0 R >>{xobject_text} >> '
                 f'/Contents {content_id} 0 R >>'
             ).encode('ascii')
             page_ids.append(page_id)

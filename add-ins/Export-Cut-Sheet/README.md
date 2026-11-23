@@ -34,18 +34,18 @@ Each placement of a component is a separate CSV row. In the PDF, repeated instan
 
 ## Drawings
 
-The first page shows every visible body in the design as one model, even when only selected bodies are exported. It has four views at one scale: **Home** and **Top** above **Front** and **Right**. The views follow the design's ViewCube, including a custom Home or Front view. The front and right views carry the overall width, depth, and height, and the title block lists the body count.
+The first page shows every visible body in the design as one model, even when only selected bodies are exported. It has four shaded views at one scale: **Home** and **Top** above **Front** and **Right**. Hidden lines are removed, and visible edges are drawn as sharp lines over the shading. The views follow the design's ViewCube, including a custom Home or Front view. The front and right views carry the overall width, depth, and height, and the title block lists the body count.
 
-Each part page after that:
+Part pages follow in order of body name. Each part page:
 
-- Views are projected from the body's own frame. The top view looks down the thickness, which is the flat profile for sheet parts.
+- Top, Front, and Right show the part the way Fusion's ViewCube shows it, so a panel standing upright is drawn upright, seen from the front. A part placed at an angle is squared up to the nearest view, so its dimensions stay true size. The **SIZE** cell still lists length, width, and thickness.
 - Each view gets overall horizontal and vertical dimensions.
 - Feature dimensions run as a chain inside the overall dimensions. They mark where notches, steps, and angled edges start and end, and where hole centers sit, along the length, width, and thickness. Each chain is drawn once, on the top view for length and width and on the front view for thickness. Positions closer together than about 10 points on paper are merged so the chain stays readable.
 - Straight edges that are not horizontal or vertical get an angle dimension, measured from the nearest horizontal or vertical reference, for example `15.3°`.
 - Circular edges seen face-on get center marks and a diameter callout. Equal diameters are grouped, for example `4X Ø 0.250`. Holes that Fusion stores as two half arcs are recognized as full circles.
 - Fillets and rounded ends seen face-on get a radius callout, grouped the same way, for example `2X R 0.500`.
 - The scale snaps to a standard ratio (such as 1:2 or 1:10) and is printed in the title block.
-- The views are wireframe projections. Hidden edges are drawn as solid lines, not dashed.
+- Part views are wireframe projections. Hidden edges are drawn as solid lines, not dashed.
 
 The PDF is written by the add-in itself, because Fusion's API cannot create drawing views. Nothing extra needs installing.
 

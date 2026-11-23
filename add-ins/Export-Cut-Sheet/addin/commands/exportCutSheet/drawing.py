@@ -1,12 +1,13 @@
 """Three-view dimensioned drawings laid out on PDF pages.
 
-Model values are in centimeters, in each body's own frame: x is length,
-y is width, z is thickness, and the origin is the frame's minimum corner.
-Paper values are PDF points.
+Model values are in centimeters, in each body's own frame, with axes lined
+up with Fusion's Front view: x runs right, y runs away from the viewer, and z
+runs up. The origin is the frame's minimum corner. Paper values are PDF points.
 """
 import math
 from dataclasses import dataclass, field
 
+from . import shading
 from .pdf_writer import PdfDocument, text_width
 
 PT_PER_INCH = 72.0
@@ -97,13 +98,16 @@ class PartSheet:
     body_name: str
     component_name: str
     document_name: str
+    # Length >= width >= thickness, for the title block.
     size: tuple
     quantity: int = 1
+    # Extents along the view frame's x, y, z. Defaults to `size`.
+    view_size: tuple = None
 
 
 @dataclass
 class OverviewSheet:
-    # View name -> polylines of (u, v) paper-axis coordinates in model centimeters.
+    # View name -> shading.SceneView in model centimeters.
     views: dict
     document_name: str
     body_count: int
@@ -187,15 +191,6 @@ def default_view_directions(z_up=True):
         'front': ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
         'right': ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
     }
-
-
-def polyline_bounds(polylines):
-    """(min u, min v, max u, max v) over all points, or None when empty."""
-    us = [u for polyline in polylines for u, _v in polyline]
-    vs = [v for polyline in polylines for _u, v in polyline]
-    if not us:
-        return None
-    return min(us), min(vs), max(us), max(vs)
 
 
 def _dot(a, b):
@@ -509,25 +504,25 @@ def _page_frame(page):
 
 
 def draw_overview(page, overview, fmt, date_text, sheet, sheet_count):
-    """Home, top, front, and right views of the whole model with its overall size."""
+    """Shaded home, top, front, and right views of the whole model with its overall size."""
     area, title_rect = _page_frame(page)
-    bounds = {name: polyline_bounds(overview.views.get(name) or []) for name in OVERVIEW_VIEWS}
+    bounds = {name: shading.scene_bounds(overview.views.get(name)) for name in OVERVIEW_VIEWS}
     extents = {
         name: (b[2] - b[0], b[3] - b[1]) if b else (0.0, 0.0)
         for name, b in bounds.items()
     }
     layout = layout_overview(extents, area)
-    scale = layout.scale
 
     for name in OVERVIEW_VIEWS:
         box = layout.boxes[name]
-        b = bounds[name]
-        if b:
-            for polyline in overview.views[name]:
-                page.polyline(
-                    [(box.x + (u - b[0]) * scale, box.y + (v - b[1]) * scale) for u, v in polyline],
-                    OVERVIEW_LINE_WIDTH,
-                )
+        if bounds[name]:
+            raster, edges = shading.render(overview.views[name], bounds[name], layout.scale)
+            page.image(
+                box.x, box.y + box.height - raster.height_pt, raster.width_pt, raster.height_pt,
+                raster.width, raster.height, raster.pixels, shading.PALETTE,
+            )
+            for run in edges:
+                page.polyline([(box.x + x, box.y + y) for x, y in run], OVERVIEW_LINE_WIDTH)
         page.text(box.x + box.width / 2.0, box.y + box.height + 8.0, OVERVIEW_LABELS[name], 7, bold=True, align='center')
 
     width, height = extents['front']
@@ -555,13 +550,14 @@ def draw_overview(page, overview, fmt, date_text, sheet, sheet_count):
 
 def draw_part(page, part, fmt, date_text, sheet, sheet_count):
     area, title_rect = _page_frame(page)
-    layout = layout_views(part.size, area)
+    view_size = part.view_size or part.size
+    layout = layout_views(view_size, area)
     views = {name: part.views.get(name) or ViewData() for name in VIEW_AXES}
 
     for name, box in layout.boxes.items():
         _draw_view(page, box, views[name], layout.scale, fmt)
 
-    _draw_dimensions(page, layout, views, part.size, fmt)
+    _draw_dimensions(page, layout, views, view_size, fmt)
     _draw_view_labels(page, layout.boxes)
     _draw_title_block(
         page,
