@@ -1,0 +1,14 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"5b6297bf-9043-43d5-99fc-abca178ef60e",
+	"author":	"Connor E",
+	"description":	{
+		"":	"Find, sort, select, and operate on components, bodies, and faces by name"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.png"
+}
